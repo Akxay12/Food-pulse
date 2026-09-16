@@ -1,0 +1,7 @@
+{
+  "name": "FoodCheck",
+  "description": "AI-powered food safety checking and discovery mobile app. Check it. Know it. Eat smarter.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
