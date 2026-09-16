@@ -29,6 +29,10 @@ export const userService = {
         const user = JSON.parse(stored) as UserProfile;
         if (user.uid === uid) return user;
       }
+      const allUsers = JSON.parse(localStorage.getItem(STORAGE_USERS_KEY) || '{}');
+      for (const key of Object.keys(allUsers)) {
+        if (allUsers[key].uid === uid) return allUsers[key];
+      }
     } catch {
       // Ignore
     }
@@ -68,7 +72,6 @@ export const userService = {
    * Check if a shopkeeper has completed their shop setup (Module 1G)
    */
   async getShopkeeperStatus(uid: string): Promise<{ hasSetupShop: boolean; shopName?: string }> {
-    // In Module 1, return whether shop setup is complete
     const stored = localStorage.getItem(`foodcheck_shop_${uid}`);
     if (stored) {
       try {
@@ -103,6 +106,69 @@ export const userService = {
       if (stored) {
         const user = JSON.parse(stored) as UserProfile;
         user.reviewsCount = Math.max(0, (user.reviewsCount || 0) + delta);
+        localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(user));
+      }
+    } catch {
+      // Ignore
+    }
+  },
+
+  /**
+   * Increment or decrement video count in user profile
+   */
+  async incrementUserVideoCount(uid: string, delta: number = 1): Promise<number> {
+    let nextCount = 0;
+    if (isFirebaseConfigured && db) {
+      try {
+        const ref = doc(db, 'users', uid);
+        await updateDoc(ref, {
+          videosCount: increment(delta)
+        });
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          nextCount = snap.data().videosCount || 0;
+        }
+      } catch (err) {
+        console.warn('Failed to increment user video count in Firestore:', err);
+      }
+    }
+
+    // Local fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+      if (stored) {
+        const user = JSON.parse(stored) as UserProfile;
+        user.videosCount = Math.max(0, (user.videosCount || 0) + delta);
+        nextCount = user.videosCount;
+        localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(user));
+      }
+    } catch {
+      // Ignore
+    }
+    return nextCount;
+  },
+
+  /**
+   * Update helpful likes received count for user
+   */
+  async updateHelpfulLikesReceived(uid: string, totalLikes: number): Promise<void> {
+    if (isFirebaseConfigured && db) {
+      try {
+        const ref = doc(db, 'users', uid);
+        await updateDoc(ref, {
+          helpfulLikesReceived: totalLikes
+        });
+      } catch (err) {
+        console.warn('Failed to update helpful likes in Firestore:', err);
+      }
+    }
+
+    // Local fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+      if (stored) {
+        const user = JSON.parse(stored) as UserProfile;
+        user.helpfulLikesReceived = totalLikes;
         localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(user));
       }
     } catch {

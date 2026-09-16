@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { MobileFrame } from './components/common/MobileFrame';
 import { BottomNav } from './components/common/BottomNav';
 import { SplashScreen } from './components/screens/SplashScreen';
@@ -25,7 +25,8 @@ import {
   FoodVideo,
   UserBadge,
   AppNotification,
-  SupportedLanguage
+  SupportedLanguage,
+  ReviewDocument
 } from './types';
 
 import {
@@ -39,6 +40,12 @@ import {
 import { TRANSLATIONS } from './utils/translations';
 import { authService } from './services/authService';
 import { reviewService } from './services/reviewService';
+import { shopService } from './services/shopService';
+import { foodScanService } from './services/foodScanService';
+import { videoService } from './services/videoService';
+import { badgeService } from './services/badgeService';
+import { notificationService } from './services/notificationService';
+import { userService } from './services/userService';
 
 export default function App() {
   // Screen and Role State
@@ -71,6 +78,62 @@ export default function App() {
   // Translation helper dictionary for current language
   const t = TRANSLATIONS[language] || TRANSLATIONS.en;
 
+  // Refresh dynamic user badges based on latest stats & reviews
+  const refreshUserBadges = useCallback(async (
+    uid: string,
+    vCount: number,
+    totalLikes: number
+  ) => {
+    try {
+      const userReviewsData = await reviewService.getUserReviewsAndLikes(uid);
+      const evalResult = badgeService.evaluateBadges({
+        videoCount: vCount,
+        userReviews: userReviewsData.reviews,
+        totalHelpfulLikes: totalLikes || userReviewsData.totalLikes,
+        scanCount: recentScans.length
+      });
+      setBadges(evalResult.badges);
+    } catch {
+      // Fallback
+    }
+  }, [recentScans.length]);
+
+  // Load Initial App Data from Firestore / Local Storage
+  const loadAppData = useCallback(async (userId: string) => {
+    try {
+      // 1. Load Published FoodCheck Shops
+      const loadedShops = await shopService.getPublishedShops();
+      if (loadedShops && loadedShops.length > 0) {
+        setShops(loadedShops);
+        setActiveShop(loadedShops[0]);
+      }
+
+      // 2. Load Private Scans for user
+      const userScans = await foodScanService.getUserScans(userId);
+      if (userScans && userScans.length > 0) {
+        setRecentScans(userScans);
+        setActiveScanResult(userScans[0]);
+      }
+
+      // 3. Load Community Videos
+      const loadedVideos = await videoService.getVideos(userId);
+      if (loadedVideos && loadedVideos.length > 0) {
+        setVideos(loadedVideos);
+      }
+
+      // 4. Load Notifications
+      const loadedNotifs = await notificationService.getUserNotifications(userId);
+      if (loadedNotifs && loadedNotifs.length > 0) {
+        setNotifications(loadedNotifs);
+      }
+
+      // 5. Evaluate Badges
+      await refreshUserBadges(userId, user.videosCount, user.likesCount);
+    } catch (err) {
+      console.warn('Initial data load error:', err);
+    }
+  }, [refreshUserBadges, user.likesCount, user.videosCount]);
+
   // Session Management: Check Firebase Authentication state on startup (Module 1E)
   useEffect(() => {
     const unsubscribe = authService.onAuthStateChanged(async (authProfile) => {
@@ -78,7 +141,13 @@ export default function App() {
         setIsAuthenticated(true);
         setUserRole(authProfile.role || 'user');
 
-        const liveReviewsCount = await reviewService.getUserReviewCount(authProfile.uid);
+        const liveReviewsData = await reviewService.getUserReviewsAndLikes(authProfile.uid);
+        const liveProfile = await userService.getUserProfile(authProfile.uid);
+
+        const currentVideosCount = liveProfile?.videosCount ?? user.videosCount;
+        const currentLikesCount = liveReviewsData.totalLikes ?? user.likesCount;
+        const currentReviewsCount = liveReviewsData.reviews.length || (liveProfile?.reviewsCount ?? user.reviewsCount);
+
         setUser((prev) => ({
           ...prev,
           uid: authProfile.uid,
@@ -86,21 +155,25 @@ export default function App() {
           email: authProfile.email,
           username: authProfile.email ? `@${authProfile.email.split('@')[0]}` : '@user',
           avatarUrl: authProfile.profileImage || prev.avatarUrl,
-          reviewsCount: liveReviewsCount > 0 ? liveReviewsCount : prev.reviewsCount
+          reviewsCount: currentReviewsCount,
+          videosCount: currentVideosCount,
+          likesCount: currentLikesCount
         }));
+
+        await loadAppData(authProfile.uid);
       } else {
         setIsAuthenticated(false);
+        await loadAppData('local-default-user');
       }
     });
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, []);
+  }, [loadAppData]);
 
-  // Handlers
+  // Splash Screen Handler
   const handleSplashFinish = () => {
-    // If user is already logged in, navigate straight to role-based dashboard; otherwise show auth (Module 1E & 1D)
     if (isAuthenticated) {
       setCurrentScreen(userRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'home');
     } else {
@@ -138,22 +211,22 @@ export default function App() {
     setCurrentScreen('scanner');
   };
 
-  const handleScanComplete = (result: FoodScanResult) => {
+  // AI Food Scan Handler
+  const handleScanComplete = async (result: FoodScanResult) => {
     setActiveScanResult(result);
-    // Add to recent scans list
-    setRecentScans((prev) => [result, ...prev.filter((r) => r.id !== result.id)]);
+    // Save to Firestore private scans collection
+    const saved = await foodScanService.saveScan(result, user.uid);
+    setRecentScans((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)]);
     setCurrentScreen('scanner_result');
 
-    // Add a notification
-    const newNotif: AppNotification = {
-      id: 'n-' + Date.now(),
+    // Create persistent notification
+    const notif = await notificationService.sendNotification({
+      userId: user.uid,
       title: 'Your food scan is ready',
       body: `${result.foodName} safety score: ${result.safetyScore}/10 (${result.riskLabel})`,
-      time: 'Just now',
-      type: 'scan',
-      read: false
-    };
-    setNotifications((prev) => [newNotif, ...prev]);
+      type: 'scan'
+    });
+    setNotifications((prev) => [notif, ...prev]);
   };
 
   const handleSelectScanResult = (scan: FoodScanResult) => {
@@ -166,7 +239,9 @@ export default function App() {
     setCurrentScreen('shop_details');
   };
 
-  const handleToggleLikeReview = (shopId: string, reviewId: string) => {
+  // Like / Dislike Review Handlers
+  const handleToggleLikeReview = async (shopId: string, reviewId: string) => {
+    // Optimistic UI update
     setShops((prevShops) =>
       prevShops.map((shop) => {
         if (shop.id !== shopId) return shop;
@@ -184,8 +259,12 @@ export default function App() {
         };
       })
     );
+
+    // Call service to update in Firestore
+    await reviewService.toggleLikeReview(reviewId, user.uid);
   };
 
+  // Review Submission Handler
   const handleSubmitReview = async (data: {
     targetType: 'food' | 'shop';
     shopId: string;
@@ -219,35 +298,50 @@ export default function App() {
       userLiked: false
     };
 
+    // Recalculate shop aggregate ratings
+    const aggRatings = await reviewService.calculateShopRatings(data.shopId);
+
     setShops((prevShops) =>
       prevShops.map((s) => {
         if (s.id !== data.shopId) return s;
         return {
           ...s,
+          rating: aggRatings.rating || s.rating,
+          hygieneRating: aggRatings.hygieneRating || s.hygieneRating,
+          foodQualityRating: aggRatings.foodQualityRating || s.foodQualityRating,
           reviews: [newReview, ...s.reviews]
         };
       })
     );
 
+    const nextRevCount = user.reviewsCount + 1;
     setUser((prev) => ({
       ...prev,
-      reviewsCount: prev.reviewsCount + 1
+      reviewsCount: nextRevCount
     }));
 
-    // Return to shop details
+    // Update active shop
     const targetShop = shops.find((s) => s.id === data.shopId) || shops[0];
     setActiveShop({
       ...targetShop,
+      rating: aggRatings.rating || targetShop.rating,
+      hygieneRating: aggRatings.hygieneRating || targetShop.hygieneRating,
+      foodQualityRating: aggRatings.foodQualityRating || targetShop.foodQualityRating,
       reviews: [newReview, ...targetShop.reviews]
     });
 
-    // Smooth return after brief success feedback
+    // Re-evaluate badges
+    await refreshUserBadges(user.uid, user.videosCount, user.likesCount);
+
+    // Smooth return
     setTimeout(() => {
       setCurrentScreen('shop_details');
     }, 450);
   };
 
-  const handleToggleLikeVideo = (videoId: string) => {
+  // Video Actions
+  const handleToggleLikeVideo = async (videoId: string) => {
+    // Optimistic UI update
     setVideos((prevVideos) =>
       prevVideos.map((v) => {
         if (v.id !== videoId) return v;
@@ -259,29 +353,30 @@ export default function App() {
         };
       })
     );
+
+    // Persist to service
+    await videoService.toggleLikeVideo(videoId, user.uid);
   };
 
-  const handleUploadVideo = (videoData: Partial<FoodVideo>) => {
-    const newVideo: FoodVideo = {
-      id: 'v-' + Date.now(),
-      thumbnailUrl: videoData.thumbnailUrl || 'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=600&auto=format&fit=crop&q=80',
-      authorName: user.name,
-      authorUsername: user.username,
-      authorAvatar: user.avatarUrl,
-      foodName: videoData.foodName || 'Delicious Street Dish',
-      shopName: videoData.shopName || 'Nearby Stall',
-      caption: videoData.caption || 'Checked food freshness on FoodCheck!',
-      likes: 1,
-      isLiked: true,
-      commentsCount: 0,
-      sharesCount: 0,
-      postedTime: 'Just now',
-      tags: ['FoodCheck', 'StreetFood']
-    };
+  const handleUploadVideo = async (videoData: Partial<FoodVideo>) => {
+    const uploadRes = await videoService.uploadVideo(
+      {
+        foodName: videoData.foodName || 'Delicious Street Dish',
+        shopName: videoData.shopName || 'Nearby Stall',
+        caption: videoData.caption || 'Checked food freshness on FoodCheck!',
+        thumbnailUrl: videoData.thumbnailUrl || 'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=600&auto=format&fit=crop&q=80',
+      },
+      {
+        uid: user.uid,
+        name: user.name,
+        avatarUrl: user.avatarUrl
+      }
+    );
+    const uploaded = uploadRes.video;
 
     const nextCount = user.videosCount + 1;
     setUser((prev) => ({ ...prev, videosCount: nextCount }));
-    setVideos((prev) => [newVideo, ...prev]);
+    setVideos((prev) => [uploaded, ...prev]);
 
     // Check Food Vlogger Badge condition (> 5 videos)
     if (nextCount > 5) {
@@ -293,55 +388,63 @@ export default function App() {
         )
       );
 
-      const notif: AppNotification = {
-        id: 'n-vlog-' + Date.now(),
+      const notif = await notificationService.sendNotification({
+        userId: user.uid,
         title: 'Food Vlogger badge unlocked 🏅',
         body: `You have shared ${nextCount} food discovery videos!`,
-        time: 'Just now',
         type: 'badge',
-        read: false,
         badgeType: 'vlogger'
-      };
+      });
       setNotifications((prev) => [notif, ...prev]);
     }
   };
 
-  const handlePublishShop = (newShop: FoodShop) => {
-    setShops((prev) => [newShop, ...prev]);
-    setActiveShop(newShop);
+  // Shopkeeper Actions
+  const handlePublishShop = async (newShop: FoodShop) => {
+    const savedShop = await shopService.createOrUpdateShop({
+      ...newShop,
+      ownerId: user.uid
+    });
+
+    setShops((prev) => [savedShop, ...prev.filter((s) => s.id !== savedShop.id)]);
+    setActiveShop(savedShop);
+
     // User Journey: Shop published -> appears on shared FoodCheck map
     setCurrentScreen('map');
 
-    const notif: AppNotification = {
-      id: 'n-shop-' + Date.now(),
+    const notif = await notificationService.sendNotification({
+      userId: user.uid,
       title: 'Stall Published to Shared Map',
       body: `"${newShop.name}" is now live for all nearby food lovers.`,
-      time: 'Just now',
-      type: 'shop',
-      read: false
-    };
+      type: 'shop'
+    });
     setNotifications((prev) => [notif, ...prev]);
   };
 
-  const handleToggleShopStatus = () => {
-    setShops((prevShops) =>
-      prevShops.map((s, idx) => (idx === 0 ? { ...s, isOpen: !s.isOpen } : s))
-    );
+  const handleToggleShopStatus = async () => {
+    if (shops.length > 0) {
+      const targetShop = shops[0];
+      const newStatus = await shopService.toggleShopStatus(targetShop.id, user.uid);
+      setShops((prevShops) =>
+        prevShops.map((s) => (s.id === targetShop.id ? { ...s, isOpen: newStatus } : s))
+      );
+    }
   };
 
-  const handleUpdateShop = (updatedShop: FoodShop) => {
-    setShops((prev) => prev.map((s) => (s.id === updatedShop.id ? updatedShop : s)));
-    setActiveShop(updatedShop);
+  const handleUpdateShop = async (updatedShop: FoodShop) => {
+    const saved = await shopService.createOrUpdateShop(updatedShop);
+    setShops((prev) => prev.map((s) => (s.id === saved.id ? saved : s)));
+    setActiveShop(saved);
   };
 
-  const handleMarkAllRead = () => {
+  const handleMarkAllRead = async () => {
+    await notificationService.markAllAsRead(user.uid);
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
   const unreadNotificationsCount = notifications.filter((n) => !n.read).length;
 
-  // Decide if bottom navigation should appear
-  // Main tabs: home, map, videos, profile
+  // Decide if bottom navigation should appear on core mobile screens
   const isMainTabScreen = ['home', 'map', 'videos', 'profile'].includes(currentScreen);
 
   return (
@@ -441,7 +544,7 @@ export default function App() {
         />
       )}
 
-      {/* 12. User Profile Screen (Module 1F) */}
+      {/* 10. User Profile Screen (Module 1F) */}
       {currentScreen === 'profile' && (
         <ProfileScreen
           name={user.name}
@@ -464,7 +567,7 @@ export default function App() {
         />
       )}
 
-      {/* 14. Shopkeeper Dashboard (Module 1G) */}
+      {/* 11. Shopkeeper Dashboard (Module 1G) */}
       {currentScreen === 'shopkeeper_dashboard' && (
         <ShopkeeperDashboard
           currentShop={shops[0] || null}
@@ -480,7 +583,7 @@ export default function App() {
         />
       )}
 
-      {/* 15. Setup Shop Screen */}
+      {/* 12. Setup Shop Screen */}
       {currentScreen === 'shopkeeper_setup' && (
         <SetupShopScreen
           onBack={() => setCurrentScreen(userRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'map')}
@@ -488,7 +591,7 @@ export default function App() {
         />
       )}
 
-      {/* 16. Shopkeeper Shop Profile Screen */}
+      {/* 13. Shopkeeper Shop Profile Screen */}
       {currentScreen === 'shopkeeper_profile' && (
         <ShopkeeperProfileScreen
           shop={shops[0]}
@@ -497,7 +600,7 @@ export default function App() {
         />
       )}
 
-      {/* 17. Language Screen */}
+      {/* 14. Language Screen */}
       {currentScreen === 'language' && (
         <LanguageScreen
           currentLanguage={language}
@@ -509,7 +612,7 @@ export default function App() {
         />
       )}
 
-      {/* 18. Notification Screen */}
+      {/* 15. Notification Screen */}
       {currentScreen === 'notifications' && (
         <NotificationsScreen
           notifications={notifications}

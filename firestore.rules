@@ -11,55 +11,92 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Module 1B & 1C: User Profiles
-    // users/{uid}
+    // 1. User Profiles: users/{userId}
     match /users/{userId} {
-      // Authenticated users can read public profile data (needed for display in reviews)
       allow read: if isAuthenticated();
-      
-      // Only the user themselves can create or update their own profile document
-      allow create, update: if isOwner(userId);
-      
-      // Deletion of user profile is restricted
-      allow delete: if isOwner(userId);
+      allow create, update, delete: if isOwner(userId);
     }
 
-    // Module 1H, 1I, 1J, 1L: Reviews
-    // reviews/{reviewId}
+    // 2. Food Shops / Stalls: shops/{shopId}
+    match /shops/{shopId} {
+      // Public reading allowed for shared map & stall listings
+      allow read: if true;
+      
+      // Shop creation requires auth and matching ownerId
+      allow create: if isAuthenticated() 
+                    && request.resource.data.ownerId == request.auth.uid;
+      
+      // Only owner can update shop details or change status
+      allow update: if isOwner(resource.data.ownerId)
+                    || (
+                      // Or allow aggregate rating updates by system/authenticated callers
+                      isAuthenticated()
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'hygieneRating', 'foodQualityRating', 'reviewCount'])
+                    );
+      
+      allow delete: if isOwner(resource.data.ownerId);
+    }
+
+    // 3. Community Reviews: reviews/{reviewId}
     match /reviews/{reviewId} {
-      // Public review reading is allowed for community transparency
       allow read: if true;
 
-      // Authenticated users can create reviews, and userId must match request.auth.uid
       allow create: if isAuthenticated() 
                     && request.resource.data.userId == request.auth.uid
                     && request.resource.data.rating >= 1 
                     && request.resource.data.rating <= 5
                     && (request.resource.data.targetType == 'food' || request.resource.data.targetType == 'shop');
 
-      // Users can modify or delete only their own reviews (Module 1L)
       allow update: if isOwner(resource.data.userId)
                     || (
-                      // Or allow counter increments by authenticated users during like/unlike
                       isAuthenticated() 
                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'dislikesCount'])
                     );
+      
       allow delete: if isOwner(resource.data.userId);
 
-      // Module 1K: Likes & Dislikes Subcollections
-      // reviews/{reviewId}/likes/{userId}
+      // Subcollection likes & dislikes
       match /likes/{userId} {
         allow read: if true;
-        // User can only write their own like reaction
         allow write: if isOwner(userId);
       }
 
-      // reviews/{reviewId}/dislikes/{userId}
       match /dislikes/{userId} {
         allow read: if true;
-        // User can only write their own dislike reaction
         allow write: if isOwner(userId);
       }
+    }
+
+    // 4. Food Scans (Private User History): foodScans/{scanId}
+    match /foodScans/{scanId} {
+      // Strictly private: only owner can read their scans
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // 5. Food Vlogger Videos: videos/{videoId}
+    match /videos/{videoId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
+      allow update: if isOwner(resource.data.authorId)
+                    || (
+                      isAuthenticated()
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'commentsCount', 'sharesCount'])
+                    );
+      allow delete: if isOwner(resource.data.authorId);
+
+      match /likes/{userId} {
+        allow read: if true;
+        allow write: if isOwner(userId);
+      }
+    }
+
+    // 6. User In-App Notifications: notifications/{notificationId}
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
   }
 }

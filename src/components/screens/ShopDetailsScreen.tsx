@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Star, MapPin, Clock, Utensils, ThumbsUp, ThumbsDown, MessageSquareHeart, Share2, ShieldCheck, Check, Trash2, Loader2 } from 'lucide-react';
+import { ArrowLeft, Star, MapPin, Clock, Utensils, ThumbsUp, ThumbsDown, MessageSquareHeart, Share2, ShieldCheck, Check, Trash2, Loader2, Sparkles } from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
 import { reviewService } from '../../services/reviewService';
 
@@ -19,14 +19,20 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   onToggleLikeReview
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'reviews'>('overview');
-  const [liveReviews, setLiveReviews] = useState<any[]>(shop.reviews || []);
+  const [liveReviews, setLiveReviews] = useState<ShopReview[]>(shop.reviews || []);
   const [loadingReviews, setLoadingReviews] = useState<boolean>(false);
+  const [aggregatedRatings, setAggregatedRatings] = useState({
+    rating: shop.rating || 4.5,
+    foodQualityRating: shop.foodQualityRating || 4.6,
+    hygieneRating: shop.hygieneRating || 4.5,
+    reviewsCount: shop.reviews?.length || 0
+  });
 
   // Load reviews from Firestore
   const loadReviews = async () => {
     setLoadingReviews(true);
     try {
-      const fetched = await reviewService.getReviews(shop.id, 'shop', currentUserId);
+      const fetched = await reviewService.getReviews(shop.id, undefined, currentUserId);
       if (fetched && fetched.length > 0) {
         setLiveReviews(
           fetched.map((f) => ({
@@ -36,6 +42,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             userName: f.userName,
             userAvatar: f.userProfileImage || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
             rating: f.rating,
+            subRatings: f.subRatings,
             reviewText: f.reviewText,
             likeCount: f.likesCount,
             dislikeCount: f.dislikesCount || 0,
@@ -44,8 +51,11 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             userDisliked: f.userReaction === 'dislike'
           }))
         );
+
+        // Compute live aggregate ratings
+        const aggr = await reviewService.calculateShopRatings(shop.id);
+        setAggregatedRatings(aggr);
       } else {
-        // Fall back to shop's mock reviews if Firestore empty
         setLiveReviews(shop.reviews || []);
       }
     } catch {
@@ -120,7 +130,6 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
     }
   };
 
-
   return (
     <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-8">
       {/* Hero Image with Floating Controls */}
@@ -136,7 +145,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
         <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between">
           <button
             onClick={onBack}
-            className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/20 text-white flex items-center justify-center active:scale-95 transition-transform"
+            className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/20 text-white flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
             aria-label="Back"
           >
             <ArrowLeft size={20} />
@@ -148,7 +157,8 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                   navigator.share({ title: shop.name, url: window.location.href }).catch(() => {});
                 }
               }}
-              className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/20 text-white flex items-center justify-center active:scale-95 transition-transform"
+              className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/20 text-white flex items-center justify-center active:scale-95 transition-transform cursor-pointer"
+              aria-label="Share"
             >
               <Share2 size={18} />
             </button>
@@ -184,7 +194,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
       <div className="bg-white border-b border-slate-200/80 px-4 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all ${
+          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
             activeTab === 'overview'
               ? 'border-orange-500 text-orange-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -194,7 +204,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('menu')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all ${
+          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
             activeTab === 'menu'
               ? 'border-orange-500 text-orange-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -204,7 +214,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
         </button>
         <button
           onClick={() => setActiveTab('reviews')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all ${
+          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
             activeTab === 'reviews'
               ? 'border-orange-500 text-orange-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -216,12 +226,12 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
 
       {/* Tab Content */}
       <div className="p-4 space-y-4">
-        {/* Rating & Fast Info Header */}
+        {/* Rating & Quick Info Header */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
               <div className="text-2xl font-black text-slate-900">
-                {shop.rating}
+                {aggregatedRatings.rating}
               </div>
               <div>
                 <div className="flex items-center text-amber-500">
@@ -229,12 +239,14 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                     <Star
                       key={i}
                       size={14}
-                      className={i < Math.floor(shop.rating) ? 'fill-amber-500' : 'text-slate-300'}
+                      className={i < Math.floor(aggregatedRatings.rating) ? 'fill-amber-500' : 'text-slate-300'}
                     />
                   ))}
                 </div>
                 <span className="text-[10px] text-slate-400 font-medium">
-                  Based on community ratings
+                  {aggregatedRatings.reviewsCount > 0
+                    ? `Based on ${aggregatedRatings.reviewsCount} community ratings`
+                    : 'Community FoodCheck rating'}
                 </span>
               </div>
             </div>
@@ -258,37 +270,37 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
           </div>
         </div>
 
-        {/* Breakdown Sections: Food Quality & Hygiene */}
+        {/* Breakdown Sections: Overall Food Quality & Hygiene */}
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Food Quality
+              Overall Food Rating
             </span>
             <div className="flex items-center gap-1.5 mt-2">
               <Star size={18} className="text-amber-500 fill-amber-500" />
               <span className="text-xl font-extrabold text-slate-900">
-                {shop.foodQualityRating}
+                {aggregatedRatings.foodQualityRating}
               </span>
               <span className="text-xs text-slate-400">/ 5</span>
             </div>
             <span className="text-[10px] text-orange-600 font-semibold mt-1">
-              Top Taste Score
+              Taste, Freshness & Quality
             </span>
           </div>
 
           <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Hygiene
+              Hygiene Rating
             </span>
             <div className="flex items-center gap-1.5 mt-2">
               <ShieldCheck size={18} className="text-orange-500" />
               <span className="text-xl font-extrabold text-slate-900">
-                {shop.hygieneRating}
+                {aggregatedRatings.hygieneRating}
               </span>
               <span className="text-xs text-slate-400">/ 5</span>
             </div>
             <span className="text-[10px] text-orange-600 font-semibold mt-1">
-              Clean Stall Verified
+              Cleanliness & Safe Service
             </span>
           </div>
         </div>
@@ -300,7 +312,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
               Menu Card & Pricing
             </h3>
             <span className="text-[11px] font-semibold text-orange-600">
-              Fresh Daily
+              Daily Fresh
             </span>
           </div>
 
@@ -334,7 +346,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
               <img
                 src={shop.menuCardImage}
                 alt="Menu Card"
-                className="w-full h-32 rounded-xl object-cover"
+                className="w-full h-32 rounded-xl object-cover ring-1 ring-slate-200"
               />
             </div>
           )}
@@ -345,15 +357,15 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
           <div className="flex items-center justify-between mb-3">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Customer Reviews
+                Community Reviews
               </h3>
               <p className="text-[10px] text-slate-400 font-medium">
-                Community feedback on food & hygiene
+                Verified ratings on food freshness & hygiene
               </p>
             </div>
             <button
               onClick={() => onWriteReview(shop.id)}
-              className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold flex items-center gap-1 active:scale-95 transition-transform"
+              className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold flex items-center gap-1 active:scale-95 transition-transform cursor-pointer"
             >
               <MessageSquareHeart size={13} />
               <span>Write Review</span>
@@ -368,7 +380,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
               </div>
             ) : liveReviews.length === 0 ? (
               <p className="text-xs text-slate-400 italic py-4 text-center">
-                No reviews yet. Be the first to review!
+                No reviews yet. Be the first to review this shop.
               </p>
             ) : (
               liveReviews.map((rev) => (
@@ -381,7 +393,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       <img
                         src={rev.userAvatar}
                         alt={rev.userName}
-                        className="w-7 h-7 rounded-full object-cover bg-slate-200"
+                        className="w-7 h-7 rounded-full object-cover bg-slate-200 ring-1 ring-slate-200"
                       />
                       <div>
                         <h4 className="text-xs font-bold text-slate-900">
@@ -404,7 +416,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                         <button
                           onClick={() => handleDelete(rev.id)}
                           title="Delete your review"
-                          className="text-slate-400 hover:text-red-500 p-1 rounded-md transition-colors"
+                          className="text-slate-400 hover:text-red-500 p-1 rounded-md transition-colors cursor-pointer"
                         >
                           <Trash2 size={13} />
                         </button>
@@ -422,7 +434,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       {/* Like button */}
                       <button
                         onClick={() => handleLike(rev.id)}
-                        className={`flex items-center gap-1 text-xs font-bold transition-colors ${
+                        className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
                           rev.userLiked ? 'text-orange-600' : 'text-slate-500 hover:text-slate-800'
                         }`}
                         title="Helpful (Like)"
@@ -434,13 +446,13 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       {/* Dislike button */}
                       <button
                         onClick={() => handleDislike(rev.id)}
-                        className={`flex items-center gap-1 text-xs font-bold transition-colors ${
+                        className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
                           rev.userDisliked ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
                         }`}
                         title="Not helpful (Dislike)"
                       >
                         <ThumbsDown size={13} className={rev.userDisliked ? 'fill-slate-700 text-slate-700' : ''} />
-                        {rev.dislikeCount > 0 && <span>{rev.dislikeCount}</span>}
+                        {(rev.dislikeCount || 0) > 0 && <span>{rev.dislikeCount}</span>}
                       </button>
                     </div>
 

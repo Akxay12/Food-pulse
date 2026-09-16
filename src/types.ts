@@ -29,6 +29,7 @@ export interface AnalysisSummaryItem {
 
 export interface FoodScanResult {
   id: string;
+  userId?: string;
   foodName: string;
   foodType: ScanType;
   imageUrl: string;
@@ -39,20 +40,33 @@ export interface FoodScanResult {
   summaryItems: AnalysisSummaryItem[];
   recommendation: string;
   disclaimer: string;
+  expiryDetected?: boolean;
+  detectedExpiryDate?: string;
   ingredientsOrCleanliness: string[];
   nutritionOrVisualIndicators: Record<string, string>;
+  createdAt?: string;
+}
+
+export interface FoodScanDocument extends FoodScanResult {
+  scanId: string;
+  userId: string;
 }
 
 export interface ShopReview {
   id: string;
   shopId: string;
+  userId?: string;
   userName: string;
   userAvatar: string;
   rating: number;
+  subRatings?: Record<string, number>;
   reviewText: string;
   likeCount: number;
+  dislikeCount?: number;
   date: string;
   userLiked?: boolean;
+  userDisliked?: boolean;
+  createdAt?: string;
 }
 
 export interface MenuItem {
@@ -66,6 +80,7 @@ export interface MenuItem {
 
 export interface FoodShop {
   id: string;
+  ownerId?: string;
   name: string;
   category: string;
   imageUrl: string;
@@ -73,6 +88,7 @@ export interface FoodShop {
   distanceMeters: number;
   rating: number;
   isOpen: boolean;
+  isPublished?: boolean;
   isPopular?: boolean;
   openingTime: string;
   closingTime: string;
@@ -86,10 +102,37 @@ export interface FoodShop {
   menuCardImage?: string;
   menuItems: MenuItem[];
   reviews: ShopReview[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ShopDocument {
+  shopId: string;
+  ownerId: string;
+  shopName: string;
+  category: string;
+  description: string;
+  latitude: number;
+  longitude: number;
+  openingTime: string;
+  closingTime: string;
+  shopImage: string;
+  menuImage?: string;
+  isPublished: boolean;
+  isOpen: boolean;
+  rating: number;
+  foodQualityRating: number;
+  hygieneRating: number;
+  serviceRating: number;
+  address: string;
+  menuItems: MenuItem[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface FoodVideo {
   id: string;
+  userId?: string;
   videoUrl?: string;
   thumbnailUrl: string;
   authorName: string;
@@ -97,6 +140,7 @@ export interface FoodVideo {
   authorAvatar: string;
   foodName: string;
   shopName: string;
+  shopId?: string;
   caption: string;
   likes: number;
   isLiked?: boolean;
@@ -104,6 +148,24 @@ export interface FoodVideo {
   sharesCount: number;
   postedTime: string;
   tags: string[];
+  createdAt?: string;
+}
+
+export interface VideoDocument {
+  videoId: string;
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  videoUrl?: string;
+  thumbnailUrl: string;
+  foodName: string;
+  caption: string;
+  shopId?: string;
+  shopName?: string;
+  likesCount: number;
+  commentsCount: number;
+  sharesCount: number;
+  createdAt: string;
 }
 
 export interface UserBadge {
@@ -116,16 +178,20 @@ export interface UserBadge {
   criteriaText: string;
   currentCount: number;
   targetCount: number;
+  isLockedDueToCondition?: boolean;
+  lockExplanation?: string;
 }
 
 export interface AppNotification {
   id: string;
+  userId?: string;
   title: string;
   body: string;
   time: string;
   type: 'badge' | 'like' | 'scan' | 'shop';
   read: boolean;
   badgeType?: 'vlogger' | 'rater';
+  createdAt?: string;
 }
 
 export type SupportedLanguage = 
@@ -147,6 +213,8 @@ export interface UserProfile {
   profileImage?: string;
   createdAt: string;
   reviewsCount?: number;
+  videosCount?: number;
+  helpfulLikesReceived?: number;
 }
 
 export interface ReviewDocument {
@@ -165,4 +233,3 @@ export interface ReviewDocument {
   createdAt: string;
   userReaction?: 'like' | 'dislike' | null;
 }
-

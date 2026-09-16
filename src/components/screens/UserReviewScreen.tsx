@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2 } from 'lucide-react';
+import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2, AlertCircle } from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
 
 interface UserReviewScreenProps {
@@ -29,14 +29,20 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
   // Sub-ratings:
   // For shop: Hygiene, Cleanliness, Service
   // For food: Taste, Freshness, Quality
-  const [subRatings, setSubRatings] = useState<Record<string, number>>({
-    sub1: 5,
-    sub2: 4,
-    sub3: 5,
+  const [shopSubRatings, setShopSubRatings] = useState<Record<string, number>>({
+    Hygiene: 5,
+    Cleanliness: 5,
+    Service: 4,
+  });
+
+  const [foodSubRatings, setFoodSubRatings] = useState<Record<string, number>>({
+    Taste: 5,
+    Freshness: 5,
+    Quality: 4,
   });
 
   const [reviewText, setReviewText] = useState(
-    'Food was fresh and the stall was clean. The server wore caps and handled food with care!'
+    'Food was fresh and the stall was impeccably clean. The server wore caps and handled food with care!'
   );
   const [photoPreview, setPhotoPreview] = useState<string | null>(
     'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=400&auto=format&fit=crop&q=80'
@@ -46,27 +52,24 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const subLabels =
-    targetType === 'shop'
-      ? [
-          { key: 'sub1', label: 'Hygiene' },
-          { key: 'sub2', label: 'Cleanliness' },
-          { key: 'sub3', label: 'Service' },
-        ]
-      : [
-          { key: 'sub1', label: 'Taste' },
-          { key: 'sub2', label: 'Freshness' },
-          { key: 'sub3', label: 'Quality' },
-        ];
+  const currentSubRatings = targetType === 'shop' ? shopSubRatings : foodSubRatings;
 
   const handleSubRatingChange = (key: string, value: number) => {
-    setSubRatings((prev) => ({ ...prev, [key]: value }));
+    if (targetType === 'shop') {
+      setShopSubRatings((prev) => ({ ...prev, [key]: value }));
+    } else {
+      setFoodSubRatings((prev) => ({ ...prev, [key]: value }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!overallRating || overallRating < 1) {
       setErrorMessage('Please select a star rating.');
+      return;
+    }
+    if (!reviewText.trim()) {
+      setErrorMessage('Please write your review feedback.');
       return;
     }
 
@@ -77,8 +80,8 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
         targetType,
         shopId: selectedShopId,
         rating: overallRating,
-        subRatings,
-        reviewText,
+        subRatings: currentSubRatings,
+        reviewText: reviewText.trim(),
         photoUrl: photoPreview || undefined,
       });
       setSuccessMessage('Review posted successfully!');
@@ -88,14 +91,13 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     }
   };
 
-
   return (
     <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
       {/* Top Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button
           onClick={onBack}
-          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform"
+          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform cursor-pointer"
           aria-label="Back"
         >
           <ArrowLeft size={18} />
@@ -112,26 +114,26 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
           <button
             type="button"
             onClick={() => setTargetType('shop')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               targetType === 'shop'
                 ? 'bg-white text-orange-950 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Store size={14} />
-            <span>Shop Experience</span>
+            <span>Shop Hygiene</span>
           </button>
           <button
             type="button"
             onClick={() => setTargetType('food')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               targetType === 'food'
                 ? 'bg-white text-orange-950 shadow-xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <UtensilsCrossed size={14} />
-            <span>Food Item</span>
+            <span>Food Quality</span>
           </button>
         </div>
 
@@ -164,7 +166,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
                 key={star}
                 type="button"
                 onClick={() => setOverallRating(star)}
-                className="p-1 text-amber-500 active:scale-125 transition-transform"
+                className="p-1 text-amber-500 active:scale-125 transition-transform cursor-pointer"
               >
                 <Star
                   size={32}
@@ -175,35 +177,35 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
           </div>
           <p className="text-xs font-bold text-slate-700 mt-2">
             {overallRating === 5
-              ? 'Excellent & Fresh'
+              ? 'Excellent & Fresh (5/5)'
               : overallRating === 4
-              ? 'Very Good'
+              ? 'Very Good (4/5)'
               : overallRating === 3
-              ? 'Average'
-              : 'Needs Improvement'}
+              ? 'Average (3/5)'
+              : 'Needs Improvement (<3/5)'}
           </p>
         </div>
 
         {/* Sub-Ratings Grid (Hygiene, Cleanliness, Service OR Taste, Freshness, Quality) */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-3">
           <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-            {targetType === 'shop' ? 'Shop Evaluation Metrics' : 'Food Evaluation Metrics'}
+            {targetType === 'shop' ? 'Shop Hygiene Metrics' : 'Food Taste & Freshness Metrics'}
           </span>
 
-          {subLabels.map((sub) => (
-            <div key={sub.key} className="flex items-center justify-between pt-1">
-              <span className="text-xs font-bold text-slate-700">{sub.label}</span>
+          {Object.entries(currentSubRatings).map(([label, val]) => (
+            <div key={label} className="flex items-center justify-between pt-1">
+              <span className="text-xs font-bold text-slate-700">{label}</span>
               <div className="flex items-center gap-1 text-amber-400">
                 {[1, 2, 3, 4, 5].map((st) => (
                   <button
                     key={st}
                     type="button"
-                    onClick={() => handleSubRatingChange(sub.key, st)}
-                    className="p-0.5 text-amber-500 hover:scale-110"
+                    onClick={() => handleSubRatingChange(label, st)}
+                    className="p-0.5 text-amber-500 hover:scale-110 cursor-pointer"
                   >
                     <Star
                       size={17}
-                      className={st <= subRatings[sub.key] ? 'fill-amber-400 text-amber-500' : 'text-slate-200'}
+                      className={st <= Number(val) ? 'fill-amber-400 text-amber-500' : 'text-slate-200'}
                     />
                   </button>
                 ))}
@@ -239,7 +241,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
               <button
                 type="button"
                 onClick={() => setPhotoPreview(null)}
-                className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 text-xs"
+                className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 text-xs cursor-pointer"
               >
                 ✕
               </button>
@@ -252,7 +254,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
                   'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=400&auto=format&fit=crop&q=80'
                 )
               }
-              className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-700 transition-colors"
+              className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-700 transition-colors cursor-pointer"
             >
               <Camera size={18} />
               <span className="text-xs font-semibold">Attach Food / Stall Photo</span>
@@ -262,8 +264,9 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
 
         {/* Error / Success Feedback */}
         {errorMessage && (
-          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-            {errorMessage}
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium flex items-center gap-2">
+            <AlertCircle size={15} />
+            <span>{errorMessage}</span>
           </div>
         )}
         {successMessage && (
@@ -295,4 +298,3 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     </div>
   );
 };
-

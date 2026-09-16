@@ -22,6 +22,22 @@ export const isFirebaseConfigured = Boolean(
   firebaseConfig.apiKey !== 'MY_FIREBASE_API_KEY'
 );
 
+// External AI Vision API key check
+export const AI_API_KEY = env.VITE_AI_API_KEY || env.AI_API_KEY || env.VITE_GEMINI_API_KEY || '';
+export const isAIConfigured = Boolean(
+  AI_API_KEY &&
+  AI_API_KEY.trim() !== '' &&
+  AI_API_KEY !== 'MY_AI_API_KEY'
+);
+
+// External Google Maps API key check
+export const MAPS_API_KEY = env.VITE_MAPS_API_KEY || env.MAPS_API_KEY || '';
+export const isMapsConfigured = Boolean(
+  MAPS_API_KEY &&
+  MAPS_API_KEY.trim() !== '' &&
+  MAPS_API_KEY !== 'MY_MAPS_API_KEY'
+);
+
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let db: Firestore | null = null;

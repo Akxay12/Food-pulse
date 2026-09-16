@@ -38,7 +38,7 @@ function getLocalReviews(): ReviewDocument[] {
       rating: 5,
       subRatings: { Hygiene: 5, Cleanliness: 5, Service: 4 },
       reviewText: 'Exceptionally clean stall. The owner wears gloves and the sev puri is unmatched in Dadar!',
-      likesCount: 14,
+      likesCount: 126,
       dislikesCount: 0,
       createdAt: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
     },
@@ -52,7 +52,7 @@ function getLocalReviews(): ReviewDocument[] {
       rating: 4,
       subRatings: { Hygiene: 4, Cleanliness: 4, Service: 5 },
       reviewText: 'Hot vada pav served immediately. Good oil quality with noticeable clarity.',
-      likesCount: 8,
+      likesCount: 42,
       dislikesCount: 1,
       createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
     }
@@ -152,19 +152,26 @@ export const reviewService = {
    */
   async getReviews(
     targetId: string,
-    targetType: 'food' | 'shop',
+    targetType?: 'food' | 'shop',
     currentUserId?: string
   ): Promise<ReviewDocument[]> {
     // LIVE FIREBASE PATH
     if (isFirebaseConfigured && db) {
       try {
         const reviewsRef = collection(db, 'reviews');
-        const q = query(
+        let q = query(
           reviewsRef,
           where('targetId', '==', targetId),
-          where('targetType', '==', targetType),
           orderBy('createdAt', 'desc')
         );
+        if (targetType) {
+          q = query(
+            reviewsRef,
+            where('targetId', '==', targetId),
+            where('targetType', '==', targetType),
+            orderBy('createdAt', 'desc')
+          );
+        }
         const querySnapshot = await getDocs(q);
         const reviews: ReviewDocument[] = [];
 
@@ -195,7 +202,11 @@ export const reviewService = {
     const likes = getLocalReactions(STORAGE_LIKES_KEY);
     const dislikes = getLocalReactions(STORAGE_DISLIKES_KEY);
 
-    const filtered = local.filter((r) => r.targetId === targetId && r.targetType === targetType);
+    const filtered = local.filter((r) => {
+      const matchTarget = r.targetId === targetId;
+      return targetType ? matchTarget && r.targetType === targetType : matchTarget;
+    });
+
     return filtered.map((r) => {
       let reaction: 'like' | 'dislike' | null = null;
       if (currentUserId) {
@@ -441,5 +452,80 @@ export const reviewService = {
 
     const local = getLocalReviews();
     return local.filter((r) => r.userId === userId).length;
+  },
+
+  /**
+   * Get all reviews authored by a user and total helpful likes received
+   */
+  async getUserReviewsAndLikes(userId: string): Promise<{ reviews: ReviewDocument[]; totalLikes: number }> {
+    if (!userId) return { reviews: [], totalLikes: 0 };
+
+    if (isFirebaseConfigured && db) {
+      try {
+        const reviewsRef = collection(db, 'reviews');
+        const q = query(reviewsRef, where('userId', '==', userId), orderBy('createdAt', 'desc'));
+        const snapshot = await getDocs(q);
+        const reviews: ReviewDocument[] = snapshot.docs.map((d) => d.data() as ReviewDocument);
+        const totalLikes = reviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
+        return { reviews, totalLikes };
+      } catch (err) {
+        console.warn('Error fetching user reviews from Firestore:', err);
+      }
+    }
+
+    const local = getLocalReviews();
+    const userReviews = local.filter((r) => r.userId === userId);
+    const totalLikes = userReviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
+    return { reviews: userReviews, totalLikes };
+  },
+
+  /**
+   * Calculate shop ratings (overall, food quality, hygiene) from reviews
+   */
+  async calculateShopRatings(shopId: string): Promise<{
+    rating: number;
+    foodQualityRating: number;
+    hygieneRating: number;
+    reviewsCount: number;
+  }> {
+    const reviews = await this.getReviews(shopId);
+    if (reviews.length === 0) {
+      return { rating: 4.5, foodQualityRating: 4.6, hygieneRating: 4.5, reviewsCount: 0 };
+    }
+
+    let totalRating = 0;
+    let totalHygiene = 0;
+    let hygieneCount = 0;
+    let totalFood = 0;
+    let foodCount = 0;
+
+    for (const r of reviews) {
+      totalRating += r.rating;
+      if (r.subRatings?.Hygiene) {
+        totalHygiene += r.subRatings.Hygiene;
+        hygieneCount++;
+      }
+      if (r.subRatings?.Cleanliness) {
+        totalHygiene += r.subRatings.Cleanliness;
+        hygieneCount++;
+      }
+      if (r.subRatings?.Taste || r.subRatings?.Freshness || r.subRatings?.Quality) {
+        const foodAvg = ((r.subRatings.Taste || 0) + (r.subRatings.Freshness || 0) + (r.subRatings.Quality || 0)) /
+          ((r.subRatings.Taste ? 1 : 0) + (r.subRatings.Freshness ? 1 : 0) + (r.subRatings.Quality ? 1 : 0) || 1);
+        totalFood += foodAvg;
+        foodCount++;
+      }
+    }
+
+    const avgRating = Number((totalRating / reviews.length).toFixed(1));
+    const avgHygiene = hygieneCount > 0 ? Number((totalHygiene / hygieneCount).toFixed(1)) : avgRating;
+    const avgFood = foodCount > 0 ? Number((totalFood / foodCount).toFixed(1)) : avgRating;
+
+    return {
+      rating: avgRating,
+      foodQualityRating: avgFood,
+      hygieneRating: avgHygiene,
+      reviewsCount: reviews.length
+    };
   }
 };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, CheckCircle2, AlertTriangle, XCircle, Share2, BookmarkCheck, Camera, ShieldAlert, Sparkles, Info } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, AlertTriangle, XCircle, Share2, BookmarkCheck, Camera, ShieldAlert, Sparkles, Info, Calendar, PackageCheck, AlertOctagon } from 'lucide-react';
 import { FoodScanResult } from '../../types';
 
 interface ResultScreenProps {
@@ -32,7 +32,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
         text: 'text-amber-800',
         labelBg: 'bg-amber-100 text-amber-950 border-amber-300',
         circleStroke: '#F59E0B',
-        label: t.lowerRisk || 'Lower apparent risk'
+        label: t.lowerRisk || 'LOWER APPARENT RISK'
       }
     : isYellow
     ? {
@@ -41,7 +41,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
         text: 'text-orange-800',
         labelBg: 'bg-orange-100 text-orange-950 border-orange-300',
         circleStroke: '#F97316',
-        label: t.cautionRisk || 'Caution'
+        label: t.cautionRisk || 'CAUTION ADVISED'
       }
     : {
         border: 'border-red-500',
@@ -49,7 +49,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
         text: 'text-red-700',
         labelBg: 'bg-red-100 text-red-900 border-red-300',
         circleStroke: '#EF4444',
-        label: t.higherRisk || 'Higher apparent risk'
+        label: t.higherRisk || 'HIGHER APPARENT RISK'
       };
 
   const handleSave = () => {
@@ -60,18 +60,18 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto">
+    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Top Navigation Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button
           onClick={onBack}
-          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform"
+          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform cursor-pointer"
           aria-label="Back"
         >
           <ArrowLeft size={18} />
         </button>
         <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-          {t.safetyScoreTitle || 'AI Food Safety Assessment'}
+          {t.safetyScoreTitle || 'AI FOOD SAFETY ASSESSMENT'}
         </h2>
         <button
           onClick={() => {
@@ -86,25 +86,25 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
               setTimeout(() => setShowToast(false), 2000);
             }
           }}
-          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform"
+          className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform cursor-pointer"
           aria-label="Share"
         >
           <Share2 size={17} />
         </button>
       </div>
 
-      <div className="p-4 space-y-4 pb-12">
+      <div className="p-4 space-y-4">
         {/* Scanned Food Header Banner */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 flex items-center gap-3.5 shadow-xs">
           <img
             src={scanResult.imageUrl}
             alt={scanResult.foodName}
-            className="w-16 h-16 rounded-xl object-cover bg-slate-100 flex-shrink-0"
+            className="w-16 h-16 rounded-xl object-cover bg-slate-100 flex-shrink-0 ring-2 ring-slate-100"
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-0.5">
-              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200/80">
-                {scanResult.foodType === 'packaged' ? 'Packaged' : 'Street Food'}
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200/80">
+                {scanResult.foodType === 'packaged' ? 'Packaged Food' : 'Street Food'}
               </span>
               <span className="text-[11px] text-slate-400 font-medium">· {scanResult.scanDate}</span>
             </div>
@@ -149,23 +149,58 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
                 {score.toFixed(1)}
               </span>
               <span className="text-xs font-bold text-slate-400 -mt-0.5">
-                /10
+                / 10
               </span>
             </div>
           </div>
 
           {/* Dynamic Risk Label */}
-          <div className={`mt-4 px-3.5 py-1.5 rounded-full text-xs font-black border flex items-center gap-1.5 shadow-2xs ${scoreTheme.labelBg}`}>
-            <span className="w-2 h-2 rounded-full bg-current"></span>
+          <div className={`mt-4 px-4 py-1.5 rounded-full text-xs font-black border flex items-center gap-2 shadow-2xs ${scoreTheme.labelBg}`}>
+            <span className="w-2 h-2 rounded-full bg-current animate-pulse"></span>
             <span>{scoreTheme.label}</span>
           </div>
 
           <p className="text-[11px] text-slate-400 font-medium mt-2">
-            Safety Score calculated from 5 verified visual criteria
+            Safety assessment computed from visible inspection metrics
           </p>
         </div>
 
-        {/* Analysis Summary Cards */}
+        {/* Expiry Date Card / Status (Required) */}
+        {scanResult.foodType === 'packaged' && (
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <div
+                className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                  scanResult.expiryDetected
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                <Calendar size={18} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Expiry / Best Before OCR
+                </span>
+                <p className="text-xs font-bold text-slate-900 truncate mt-0.5">
+                  {scanResult.detectedExpiryDate ||
+                    (scanResult.expiryDetected ? 'Best Before: Valid' : 'Expiry could not be verified from this image.')}
+                </p>
+              </div>
+              <span
+                className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                  scanResult.expiryDetected
+                    ? 'bg-amber-100 text-amber-900'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {scanResult.expiryDetected ? '✓ Detected' : 'Unverified'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Detailed Analysis Summary Cards */}
         <div>
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2.5">
             {t.analysisSummary || 'Analysis Summary'}
@@ -213,7 +248,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
                             : 'bg-red-50 text-red-700'
                         }`}
                       >
-                        {isSafe ? 'Valid / Normal' : isItemCaution ? 'Review Recommended' : 'Attention'}
+                        {isSafe ? '✓ Normal' : isItemCaution ? '⚠ Review' : '⚠ Warning'}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
@@ -237,11 +272,12 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
           </p>
         </div>
 
-        {/* Small Mandatory Disclaimer Banner */}
-        <div className="p-3 bg-slate-100 rounded-xl border border-slate-200/70 flex items-start gap-2 text-slate-500">
-          <Info size={14} className="flex-shrink-0 mt-0.5 text-slate-400" />
+        {/* Mandatory Laboratory Disclaimer Banner */}
+        <div className="p-3.5 bg-slate-100 rounded-2xl border border-slate-200/80 flex items-start gap-2.5 text-slate-600">
+          <Info size={16} className="flex-shrink-0 mt-0.5 text-slate-400" />
           <p className="text-[10px] leading-relaxed font-medium">
-            {scanResult.disclaimer || t.disclaimer}
+            {scanResult.disclaimer ||
+              'AI assessment is based on visible/package information and cannot detect hidden contamination or replace laboratory food-safety testing.'}
           </p>
         </div>
 
@@ -258,7 +294,7 @@ export const ResultScreen: React.FC<ResultScreenProps> = ({
           <button
             onClick={handleSave}
             disabled={isSaved}
-            className={`w-full py-3 px-4 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 border transition-all ${
+            className={`w-full py-3 px-4 rounded-2xl font-bold text-xs flex items-center justify-center gap-2 border transition-all cursor-pointer ${
               isSaved
                 ? 'bg-amber-50 text-amber-900 border-amber-300'
                 : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'

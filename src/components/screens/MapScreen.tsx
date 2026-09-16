@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { Search, MapPin, Star, Navigation, ArrowRight, Store, X, SlidersHorizontal, Info } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, MapPin, Star, Navigation, ArrowRight, Store, X, ShieldCheck, Locate, AlertCircle } from 'lucide-react';
 import { FoodShop } from '../../types';
+import { mapService, UserCoordinates } from '../../services/mapService';
+import { shopService } from '../../services/shopService';
 
 interface MapScreenProps {
   shops: FoodShop[];
@@ -10,14 +12,17 @@ interface MapScreenProps {
 }
 
 export const MapScreen: React.FC<MapScreenProps> = ({
-  shops,
+  shops: propShops,
   onSelectShop,
   onOpenShopkeeperSetup,
   t
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRadius, setSelectedRadius] = useState<'500m' | '1km' | '2km' | '5km'>('2km');
-  const [selectedShop, setSelectedShop] = useState<FoodShop | null>(shops[0] || null);
+  const [selectedShop, setSelectedShop] = useState<FoodShop | null>(propShops[0] || null);
+  const [userLocation, setUserLocation] = useState<UserCoordinates>({ lat: 19.0178, lng: 72.8478 });
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'granted' | 'denied' | 'unavailable'>('idle');
+  const [liveShops, setLiveShops] = useState<FoodShop[]>(propShops);
 
   const radiusMetersMap: Record<string, number> = {
     '500m': 500,
@@ -26,13 +31,41 @@ export const MapScreen: React.FC<MapScreenProps> = ({
     '5km': 5000,
   };
 
-  const filteredShops = shops.filter((shop) => {
+  // Fetch shops and GPS on mount
+  useEffect(() => {
+    mapService.getCurrentLocation().then(({ coords, status }) => {
+      setLocationStatus(status);
+      if (coords) {
+        setUserLocation(coords);
+      }
+    });
+  }, []);
+
+  // Update live shops list with calculated distance
+  useEffect(() => {
+    shopService.getPublishedShops(userLocation).then((fetched) => {
+      if (fetched.length > 0) {
+        setLiveShops(fetched);
+        if (!selectedShop) setSelectedShop(fetched[0]);
+      }
+    });
+  }, [userLocation, propShops]);
+
+  const filteredShops = liveShops.filter((shop) => {
     const matchesSearch =
       shop.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       shop.category.toLowerCase().includes(searchQuery.toLowerCase());
     const withinRadius = shop.distanceMeters <= radiusMetersMap[selectedRadius];
     return matchesSearch && withinRadius;
   });
+
+  const handleRequestLocation = async () => {
+    const { coords, status } = await mapService.getCurrentLocation();
+    setLocationStatus(status);
+    if (coords) {
+      setUserLocation(coords);
+    }
+  };
 
   return (
     <div className="flex-1 flex flex-col relative bg-slate-100 overflow-hidden select-none">
@@ -43,17 +76,27 @@ export const MapScreen: React.FC<MapScreenProps> = ({
           <div className="bg-white/95 backdrop-blur-md px-3 py-1 rounded-full shadow-md border border-slate-200/80 flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
             <span className="text-xs font-bold text-slate-800 tracking-tight">
-              {t.nearbyFood || 'Nearby Food'} · Live Shared Map
+              {t.nearbyFood || 'Nearby Food'} · FoodCheck Shared Map
             </span>
           </div>
 
-          <button
-            onClick={onOpenShopkeeperSetup}
-            className="text-[11px] font-bold bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white px-3 py-1.5 rounded-full shadow-md flex items-center gap-1 transition-all active:scale-95"
-          >
-            <Store size={13} />
-            <span>+ Add Stall</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={handleRequestLocation}
+              className="w-8 h-8 rounded-full bg-white text-slate-700 shadow-md border border-slate-200 flex items-center justify-center active:scale-90 transition-transform cursor-pointer"
+              title="Get current location"
+            >
+              <Locate size={14} className={locationStatus === 'granted' ? 'text-orange-600' : 'text-slate-500'} />
+            </button>
+
+            <button
+              onClick={onOpenShopkeeperSetup}
+              className="text-[11px] font-bold bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white px-3 py-1.5 rounded-full shadow-md flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+            >
+              <Store size={13} />
+              <span>+ Add Stall</span>
+            </button>
+          </div>
         </div>
 
         {/* Search Bar */}
@@ -63,13 +106,13 @@ export const MapScreen: React.FC<MapScreenProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t.searchNearby || 'Search food or shop'}
+            placeholder={t.searchNearby || 'Search registered FoodCheck stalls...'}
             className="w-full bg-white/95 backdrop-blur-md border border-slate-200/80 shadow-md rounded-2xl pl-10 pr-10 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-amber-500/20"
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600"
+              className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
             >
               <X size={15} />
             </button>
@@ -82,7 +125,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
             <button
               key={rad}
               onClick={() => setSelectedRadius(rad)}
-              className={`px-3 py-1 rounded-full text-[11px] font-bold shadow-xs transition-all ${
+              className={`px-3 py-1 rounded-full text-[11px] font-bold shadow-xs transition-all cursor-pointer ${
                 selectedRadius === rad
                   ? 'bg-orange-500 text-white shadow-orange-500/20'
                   : 'bg-white/95 backdrop-blur-xs text-slate-700 hover:bg-white border border-slate-200/80'
@@ -94,19 +137,18 @@ export const MapScreen: React.FC<MapScreenProps> = ({
         </div>
       </div>
 
-      {/* Interactive Simulated Map Graphics */}
+      {/* Interactive Map Canvas (Vector Map Representation with registered FoodCheck stalls only) */}
       <div className="w-full h-full relative bg-[#E5E9E7] flex items-center justify-center overflow-hidden">
-        {/* SVG Roads, Waterway, and Parks Network */}
-        <svg className="w-full h-full absolute inset-0 opacity-80" xmlns="http://www.w3.org/2000/svg">
+        <svg className="w-full h-full absolute inset-0 opacity-85" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <pattern id="mapGrid" width="40" height="40" patternUnits="userSpaceOnUse">
               <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#D3DBD5" strokeWidth="0.8" />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="#E8EDE9" />
-          <rect width="100%" height="100%" fill="url(#grid)" />
+          <rect width="100%" height="100%" fill="url(#mapGrid)" />
 
-          {/* Park area */}
+          {/* Parks */}
           <path
             d="M 20 80 Q 80 40 140 90 T 260 80 L 280 200 L 40 220 Z"
             fill="#D4EAD6"
@@ -120,7 +162,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
             strokeWidth="1.5"
           />
 
-          {/* Waterway / River */}
+          {/* Waterway */}
           <path
             d="M -20 300 C 80 320, 160 260, 260 330 S 380 390, 480 340"
             fill="none"
@@ -129,22 +171,27 @@ export const MapScreen: React.FC<MapScreenProps> = ({
             strokeLinecap="round"
           />
 
-          {/* Major Avenues / Roads */}
+          {/* Roads */}
           <path d="M -10 160 L 450 160" stroke="#FFFFFF" strokeWidth="12" />
           <path d="M -10 160 L 450 160" stroke="#CBD5E1" strokeWidth="1" strokeDasharray="6,6" />
-
           <path d="M -10 460 L 450 460" stroke="#FFFFFF" strokeWidth="10" />
-
           <path d="M 180 -10 L 180 700" stroke="#FFFFFF" strokeWidth="14" />
           <path d="M 180 -10 L 180 700" stroke="#CBD5E1" strokeWidth="1" strokeDasharray="6,6" />
-
           <path d="M 80 -10 L 80 700" stroke="#FFFFFF" strokeWidth="8" />
           <path d="M 320 -10 L 320 700" stroke="#FFFFFF" strokeWidth="8" />
-
           <path d="M 30 200 L 400 520" stroke="#FFFFFF" strokeWidth="9" />
 
           {/* User Radius Pulse Circle */}
-          <circle cx="210" cy="380" r="140" fill="#F59E0B" fillOpacity="0.08" stroke="#F59E0B" strokeWidth="1.5" strokeDasharray="4,4" />
+          <circle
+            cx="210"
+            cy="380"
+            r={selectedRadius === '500m' ? 80 : selectedRadius === '1km' ? 120 : selectedRadius === '2km' ? 160 : 220}
+            fill="#F59E0B"
+            fillOpacity="0.07"
+            stroke="#F59E0B"
+            strokeWidth="1.5"
+            strokeDasharray="4,4"
+          />
         </svg>
 
         {/* User Current Location Indicator */}
@@ -155,14 +202,14 @@ export const MapScreen: React.FC<MapScreenProps> = ({
           </div>
         </div>
 
-        {/* Food Shop Pins positioned on map */}
+        {/* Only Registered FoodCheck Shop Markers Appear */}
         {filteredShops.map((shop, index) => {
-          // Pre-mapped visual offsets
           const positions = [
-            { top: '260px', left: '150px' }, // Shree Snacks
-            { top: '340px', left: '290px' }, // Food Corner
-            { top: '480px', left: '160px' }, // Taste Hub
-            { top: '210px', left: '320px' }, // Spice Villa
+            { top: '260px', left: '150px' }, // Shop 1
+            { top: '340px', left: '290px' }, // Shop 2
+            { top: '480px', left: '160px' }, // Shop 3
+            { top: '210px', left: '320px' }, // Shop 4
+            { top: '420px', left: '240px' }, // Shop 5
           ];
           const pos = positions[index % positions.length];
           const isSelected = selectedShop?.id === shop.id;
@@ -178,7 +225,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
               key={shop.id}
               onClick={() => setSelectedShop(shop)}
               style={{ top: pos.top, left: pos.left }}
-              className={`absolute z-20 transform -translate-x-1/2 -translate-y-1/2 transition-all active:scale-95 group ${
+              className={`absolute z-20 transform -translate-x-1/2 -translate-y-1/2 transition-all active:scale-95 group cursor-pointer ${
                 isSelected ? 'scale-115 z-30' : 'hover:scale-105'
               }`}
             >
@@ -190,25 +237,35 @@ export const MapScreen: React.FC<MapScreenProps> = ({
               >
                 <Store size={11} />
                 <span className="truncate max-w-[85px]">{shop.name.split(' ')[0]}</span>
-                <span className="text-[9px] opacity-90">★{shop.rating}</span>
+                <span className="text-[9px] opacity-95">★{shop.rating}</span>
               </div>
-              {/* Pin tail point */}
-              <div
-                className={`w-2 h-2 rotate-45 mx-auto -mt-1 ${pinBg.split(' ')[0]}`}
-              ></div>
+              <div className={`w-2 h-2 rotate-45 mx-auto -mt-1 ${pinBg.split(' ')[0]}`}></div>
             </button>
           );
         })}
 
-        {/* Legend Overlay at Center Right */}
+        {/* Empty State Overlay if no shops in radius */}
+        {filteredShops.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 pointer-events-none z-20">
+            <div className="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-200 text-center max-w-xs">
+              <Store size={28} className="text-slate-400 mx-auto mb-1.5" />
+              <h4 className="text-xs font-bold text-slate-800">No FoodCheck stalls in this radius</h4>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Try expanding radius to 2 km or 5 km to see registered food stalls.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Map Legend */}
         <div className="absolute right-3 top-48 bg-white/90 backdrop-blur-md p-2 rounded-xl shadow-md border border-slate-200 text-[10px] space-y-1.5 z-20">
           <div className="flex items-center gap-1.5 font-bold text-slate-700">
             <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span>
-            <span>Open</span>
+            <span>Open Stall</span>
           </div>
           <div className="flex items-center gap-1.5 font-bold text-slate-700">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-            <span>Popular / Top Rated</span>
+            <span>Top Hygiene</span>
           </div>
           <div className="flex items-center gap-1.5 font-bold text-slate-700">
             <span className="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
@@ -217,14 +274,14 @@ export const MapScreen: React.FC<MapScreenProps> = ({
         </div>
       </div>
 
-      {/* Bottom Sheet Showing Selected Shop */}
+      {/* Bottom Sheet for Selected Stall */}
       {selectedShop && (
         <div className="absolute bottom-2 left-3 right-3 z-30 bg-white rounded-3xl border border-slate-200/80 p-3.5 shadow-2xl animate-fade-in">
           <div className="flex items-center gap-3">
             <img
               src={selectedShop.imageUrl}
               alt={selectedShop.name}
-              className="w-18 h-18 rounded-2xl object-cover bg-slate-100 flex-shrink-0"
+              className="w-18 h-18 rounded-2xl object-cover bg-slate-100 flex-shrink-0 ring-1 ring-slate-100"
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between">
@@ -235,7 +292,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
                       : 'bg-slate-100 text-slate-600'
                   }`}
                 >
-                  {selectedShop.isOpen ? '🟢 Open' : 'Closed'}
+                  {selectedShop.isOpen ? '🟢 Open Now' : 'Closed'}
                 </span>
                 <div className="flex items-center gap-1 text-xs font-bold text-slate-800">
                   <Star size={13} className="text-amber-500 fill-amber-500" />
@@ -256,7 +313,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
                   {selectedShop.distance}
                 </span>
                 <span>·</span>
-                <span className="text-slate-500">Hygiene {selectedShop.hygieneRating}★</span>
+                <span className="text-slate-500 font-medium">🛡️ Hygiene {selectedShop.hygieneRating}★</span>
               </div>
             </div>
           </div>
@@ -269,7 +326,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
 
             <button
               onClick={() => onSelectShop(selectedShop)}
-              className="py-2 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-white font-bold text-xs shadow-md shadow-orange-500/20 flex items-center gap-1.5 transition-all"
+              className="py-2 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-95 text-white font-bold text-xs shadow-md shadow-orange-500/20 flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <span>{t.viewShop || 'View Shop'}</span>
               <ArrowRight size={14} />
