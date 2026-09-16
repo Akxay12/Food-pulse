@@ -4,6 +4,9 @@ import { FoodShop, AppScreen } from '../../types';
 
 interface ShopkeeperDashboardProps {
   currentShop: FoodShop | null;
+  shopkeeperName?: string;
+  shopkeeperEmail?: string;
+  role?: string;
   onNavigate: (screen: AppScreen) => void;
   onToggleShopStatus: () => void;
   onSwitchToUser: () => void;
@@ -11,6 +14,9 @@ interface ShopkeeperDashboardProps {
 
 export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
   currentShop,
+  shopkeeperName = 'Shopkeeper',
+  shopkeeperEmail,
+  role = 'shopkeeper',
   onNavigate,
   onToggleShopStatus,
   onSwitchToUser
@@ -26,18 +32,23 @@ export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
     <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Top Header */}
       <div className="bg-white px-5 pt-4 pb-4 border-b border-slate-100 flex items-center justify-between sticky top-0 z-30 shadow-xs">
-        <div>
-          <span className="text-[10px] uppercase tracking-wider font-extrabold text-orange-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-            Shopkeeper Console
-          </span>
-          <h1 className="text-base font-bold text-slate-900 tracking-tight mt-1">
-            Welcome, Shopkeeper 👋
+        <div className="min-w-0 flex-1 mr-3">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wider font-extrabold text-orange-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+              🏪 {role.toUpperCase()}
+            </span>
+          </div>
+          <h1 className="text-base font-bold text-slate-900 tracking-tight mt-1 truncate">
+            Welcome, {shopkeeperName} 👋
           </h1>
+          {shopkeeperEmail && (
+            <p className="text-[11px] text-slate-400 truncate">{shopkeeperEmail}</p>
+          )}
         </div>
 
         <button
           onClick={onSwitchToUser}
-          className="text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-full transition-colors"
+          className="text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-full transition-colors flex-shrink-0"
         >
           Switch to User
         </button>
@@ -177,7 +188,21 @@ export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
             </button>
           </div>
 
-          {currentShop && (
+          {!currentShop ? (
+            <div className="border border-dashed border-amber-300 rounded-xl p-4 bg-amber-50/50 text-center">
+              <Store size={26} className="text-amber-600 mx-auto mb-1.5" />
+              <h4 className="text-xs font-bold text-slate-800">Shop not setup yet</h4>
+              <p className="text-[10px] text-slate-500 mt-0.5 mb-3">
+                Register your food stall, operating hours, and live menu.
+              </p>
+              <button
+                onClick={() => onNavigate('shopkeeper_setup')}
+                className="py-1.5 px-3.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-bold shadow-xs hover:from-amber-600 hover:to-orange-600 cursor-pointer"
+              >
+                Setup My Shop
+              </button>
+            </div>
+          ) : (
             <div className="border border-slate-100 rounded-xl p-3 bg-slate-50 flex items-center gap-3">
               <img
                 src={currentShop.imageUrl}

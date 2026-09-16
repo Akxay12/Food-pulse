@@ -1,0 +1,112 @@
+import { doc, getDoc, updateDoc, increment } from 'firebase/firestore';
+import { db, isFirebaseConfigured } from './firebase';
+import { UserProfile } from '../types';
+
+const STORAGE_USERS_KEY = 'foodcheck_local_users';
+const STORAGE_CURRENT_KEY = 'foodcheck_current_session';
+
+export const userService = {
+  /**
+   * Fetch user profile from Firestore users/{uid}
+   */
+  async getUserProfile(uid: string): Promise<UserProfile | null> {
+    if (isFirebaseConfigured && db) {
+      try {
+        const ref = doc(db, 'users', uid);
+        const snapshot = await getDoc(ref);
+        if (snapshot.exists()) {
+          return snapshot.data() as UserProfile;
+        }
+      } catch (err) {
+        console.warn('Error fetching user profile from Firestore:', err);
+      }
+    }
+
+    // Local fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+      if (stored) {
+        const user = JSON.parse(stored) as UserProfile;
+        if (user.uid === uid) return user;
+      }
+    } catch {
+      // Ignore
+    }
+    return null;
+  },
+
+  /**
+   * Update user profile fields in Firestore
+   */
+  async updateUserProfile(uid: string, updates: Partial<UserProfile>): Promise<void> {
+    if (isFirebaseConfigured && db) {
+      try {
+        const ref = doc(db, 'users', uid);
+        await updateDoc(ref, updates as any);
+        return;
+      } catch (err) {
+        console.warn('Error updating profile in Firestore:', err);
+      }
+    }
+
+    // Local fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+      if (stored) {
+        const user = JSON.parse(stored) as UserProfile;
+        if (user.uid === uid) {
+          const updated = { ...user, ...updates };
+          localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(updated));
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  },
+
+  /**
+   * Check if a shopkeeper has completed their shop setup (Module 1G)
+   */
+  async getShopkeeperStatus(uid: string): Promise<{ hasSetupShop: boolean; shopName?: string }> {
+    // In Module 1, return whether shop setup is complete
+    const stored = localStorage.getItem(`foodcheck_shop_${uid}`);
+    if (stored) {
+      try {
+        const shop = JSON.parse(stored);
+        return { hasSetupShop: true, shopName: shop.name };
+      } catch {
+        return { hasSetupShop: false };
+      }
+    }
+    return { hasSetupShop: false };
+  },
+
+  /**
+   * Increment or decrement reviews count in user profile
+   */
+  async incrementUserReviewCount(uid: string, delta: number = 1): Promise<void> {
+    if (isFirebaseConfigured && db) {
+      try {
+        const ref = doc(db, 'users', uid);
+        await updateDoc(ref, {
+          reviewsCount: increment(delta)
+        });
+        return;
+      } catch (err) {
+        console.warn('Failed to increment user review count in Firestore:', err);
+      }
+    }
+
+    // Local fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+      if (stored) {
+        const user = JSON.parse(stored) as UserProfile;
+        user.reviewsCount = Math.max(0, (user.reviewsCount || 0) + delta);
+        localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(user));
+      }
+    } catch {
+      // Ignore
+    }
+  }
+};

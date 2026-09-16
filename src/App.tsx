@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MobileFrame } from './components/common/MobileFrame';
 import { BottomNav } from './components/common/BottomNav';
 import { SplashScreen } from './components/screens/SplashScreen';
@@ -37,15 +37,19 @@ import {
 } from './data/mockData';
 
 import { TRANSLATIONS } from './utils/translations';
+import { authService } from './services/authService';
+import { reviewService } from './services/reviewService';
 
 export default function App() {
   // Screen and Role State
   const [currentScreen, setCurrentScreen] = useState<AppScreen>('splash');
   const [userRole, setUserRole] = useState<UserRole>('user');
   const [language, setLanguage] = useState<SupportedLanguage>('en');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
-  // User State (Harshal Lad, as per prompt user)
+  // Authenticated User State (Module 1E & 1F)
   const [user, setUser] = useState({
+    uid: 'local-default-user',
     name: 'Harshal Lad',
     username: '@harshal',
     email: 'harshallad2007@gmail.com',
@@ -67,12 +71,45 @@ export default function App() {
   // Translation helper dictionary for current language
   const t = TRANSLATIONS[language] || TRANSLATIONS.en;
 
+  // Session Management: Check Firebase Authentication state on startup (Module 1E)
+  useEffect(() => {
+    const unsubscribe = authService.onAuthStateChanged(async (authProfile) => {
+      if (authProfile) {
+        setIsAuthenticated(true);
+        setUserRole(authProfile.role || 'user');
+
+        const liveReviewsCount = await reviewService.getUserReviewCount(authProfile.uid);
+        setUser((prev) => ({
+          ...prev,
+          uid: authProfile.uid,
+          name: authProfile.name,
+          email: authProfile.email,
+          username: authProfile.email ? `@${authProfile.email.split('@')[0]}` : '@user',
+          avatarUrl: authProfile.profileImage || prev.avatarUrl,
+          reviewsCount: liveReviewsCount > 0 ? liveReviewsCount : prev.reviewsCount
+        }));
+      } else {
+        setIsAuthenticated(false);
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, []);
+
   // Handlers
   const handleSplashFinish = () => {
-    setCurrentScreen('home');
+    // If user is already logged in, navigate straight to role-based dashboard; otherwise show auth (Module 1E & 1D)
+    if (isAuthenticated) {
+      setCurrentScreen(userRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'home');
+    } else {
+      setCurrentScreen('auth');
+    }
   };
 
-  const handleLoginSuccess = (role: UserRole, details?: { name: string; email: string }) => {
+  const handleLoginSuccess = async (role: UserRole, details?: { name: string; email: string }) => {
+    setIsAuthenticated(true);
     setUserRole(role);
     if (details) {
       setUser((prev) => ({
@@ -85,8 +122,15 @@ export default function App() {
     setCurrentScreen(role === 'shopkeeper' ? 'shopkeeper_dashboard' : 'home');
   };
 
+  const handleLogout = async () => {
+    await authService.logout();
+    setIsAuthenticated(false);
+    setCurrentScreen('auth');
+  };
+
   const handleContinueAsGuest = () => {
     setUserRole('user');
+    setIsAuthenticated(false);
     setCurrentScreen('home');
   };
 
@@ -142,7 +186,7 @@ export default function App() {
     );
   };
 
-  const handleSubmitReview = (data: {
+  const handleSubmitReview = async (data: {
     targetType: 'food' | 'shop';
     shopId: string;
     rating: number;
@@ -150,14 +194,27 @@ export default function App() {
     reviewText: string;
     photoUrl?: string;
   }) => {
-    const newReview = {
-      id: 'rev-' + Date.now(),
-      shopId: data.shopId,
+    // Save review to Firestore (Module 1H & 1I)
+    const saved = await reviewService.createReview({
+      userId: user.uid,
       userName: user.name,
-      userAvatar: user.avatarUrl,
+      userProfileImage: user.avatarUrl,
+      targetId: data.shopId,
+      targetType: data.targetType,
       rating: data.rating,
+      subRatings: data.subRatings,
       reviewText: data.reviewText,
-      likeCount: 1,
+      photoUrl: data.photoUrl
+    });
+
+    const newReview = {
+      id: saved.reviewId,
+      shopId: data.shopId,
+      userName: saved.userName,
+      userAvatar: saved.userProfileImage || user.avatarUrl,
+      rating: saved.rating,
+      reviewText: saved.reviewText,
+      likeCount: saved.likesCount,
       date: 'Just now',
       userLiked: false
     };
@@ -183,7 +240,11 @@ export default function App() {
       ...targetShop,
       reviews: [newReview, ...targetShop.reviews]
     });
-    setCurrentScreen('shop_details');
+
+    // Smooth return after brief success feedback
+    setTimeout(() => {
+      setCurrentScreen('shop_details');
+    }, 450);
   };
 
   const handleToggleLikeVideo = (videoId: string) => {
@@ -353,6 +414,7 @@ export default function App() {
       {currentScreen === 'shop_details' && (
         <ShopDetailsScreen
           shop={activeShop}
+          currentUserId={user.uid}
           onBack={() => setCurrentScreen('home')}
           onWriteReview={(shopId) => setCurrentScreen('review_create')}
           onToggleLikeReview={handleToggleLikeReview}
@@ -379,28 +441,36 @@ export default function App() {
         />
       )}
 
-      {/* 12. User Profile Screen */}
+      {/* 12. User Profile Screen (Module 1F) */}
       {currentScreen === 'profile' && (
         <ProfileScreen
           name={user.name}
           username={user.username}
+          email={user.email}
+          role={userRole}
           avatarUrl={user.avatarUrl}
           badges={badges}
           reviewsCount={user.reviewsCount}
           videosCount={user.videosCount}
           likesCount={user.likesCount}
           onNavigate={(screen) => setCurrentScreen(screen)}
-          onSwitchRole={() => setCurrentScreen('shopkeeper_dashboard')}
-          onLogout={() => setCurrentScreen('auth')}
+          onSwitchRole={() => {
+            setUserRole('shopkeeper');
+            setCurrentScreen('shopkeeper_dashboard');
+          }}
+          onLogout={handleLogout}
           recentScans={recentScans}
           videos={videos}
         />
       )}
 
-      {/* 14. Shopkeeper Dashboard */}
+      {/* 14. Shopkeeper Dashboard (Module 1G) */}
       {currentScreen === 'shopkeeper_dashboard' && (
         <ShopkeeperDashboard
           currentShop={shops[0] || null}
+          shopkeeperName={user.name}
+          shopkeeperEmail={user.email}
+          role={userRole}
           onNavigate={(screen) => setCurrentScreen(screen)}
           onToggleShopStatus={handleToggleShopStatus}
           onSwitchToUser={() => {

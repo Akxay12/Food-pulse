@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Logo } from '../common/Logo';
-import { Mail, Lock, User as UserIcon, Phone, ArrowRight, Store, Shield } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Phone, ArrowRight, Store, Shield, AlertCircle, Loader2 } from 'lucide-react';
 import { UserRole } from '../../types';
+import { authService } from '../../services/authService';
 
 interface AuthScreenProps {
   onLoginSuccess: (role: UserRole, userDetails?: { name: string; email: string }) => void;
@@ -16,19 +17,96 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [role, setRole] = useState<UserRole>('user');
 
   // Form states
-  const [name, setName] = useState('Harshal Lad');
-  const [identifier, setIdentifier] = useState('harshallad2007@gmail.com');
-  const [phone, setPhone] = useState('+91 98200 12345');
-  const [password, setPassword] = useState('••••••••');
-  const [confirmPassword, setConfirmPassword] = useState('••••••••');
+  const [name, setName] = useState('');
+  const [identifier, setIdentifier] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Status states
+  const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onLoginSuccess(role, {
-      name: role === 'shopkeeper' ? 'Ramesh Gupta (Shree Snacks)' : name || 'Harshal Lad',
-      email: identifier || 'harshallad2007@gmail.com'
-    });
+    setErrorMessage(null);
+
+    const email = identifier.trim();
+    if (!email) {
+      setErrorMessage('Please enter your email address.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setErrorMessage('Please enter a valid email address (e.g. name@example.com).');
+      return;
+    }
+
+    if (!password) {
+      setErrorMessage('Please enter your password.');
+      return;
+    }
+
+    if (mode === 'signup') {
+      if (!name.trim()) {
+        setErrorMessage('Full Name is required.');
+        return;
+      }
+      if (password.length < 6) {
+        setErrorMessage('Password must be at least 6 characters.');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setErrorMessage('Passwords do not match. Please verify.');
+        return;
+      }
+    }
+
+    setLoading(true);
+    try {
+      if (mode === 'signup') {
+        const profile = await authService.signUp({
+          name: name.trim(),
+          email,
+          password,
+          role,
+          phone: phone.trim()
+        });
+        onLoginSuccess(profile.role, {
+          name: profile.name,
+          email: profile.email
+        });
+      } else {
+        const profile = await authService.login(email, password);
+        onLoginSuccess(profile.role, {
+          name: profile.name,
+          email: profile.email
+        });
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Authentication failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const handleGoogleSignIn = async () => {
+    setErrorMessage(null);
+    setLoading(true);
+    try {
+      const profile = await authService.loginWithGoogle(role);
+      onLoginSuccess(profile.role, {
+        name: profile.name,
+        email: profile.email
+      });
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Google sign-in failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   return (
     <div className="flex-1 flex flex-col p-6 bg-gradient-to-b from-[#FFFDF7] via-[#FFFBF2] to-[#FAF7F2] overflow-y-auto">
@@ -91,6 +169,21 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         </p>
       </div>
 
+      {/* Error Message Alert */}
+      {errorMessage && (
+        <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 flex items-start gap-2 text-xs">
+          <AlertCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 font-medium leading-relaxed">{errorMessage}</div>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="text-red-400 hover:text-red-700 text-xs font-bold"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Form */}
       <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
         {mode === 'signup' && (
@@ -122,7 +215,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               type="text"
               value={identifier}
               onChange={(e) => setIdentifier(e.target.value)}
-              placeholder="e.g. harshallad2007@gmail.com"
+              placeholder="e.g. user@foodcheck.com"
               className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15"
               required
             />
@@ -142,7 +235,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="+91 98200 12345"
                 className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-3.5 py-2.5 text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-500 focus:ring-2 focus:ring-amber-500/15"
-                required
               />
             </div>
           </div>
@@ -195,10 +287,20 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         {/* Submit Button */}
         <button
           type="submit"
-          className="mt-2 w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+          disabled={loading}
+          className="mt-2 w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-[0.99] text-white font-bold text-sm shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
         >
-          <span>{mode === 'login' ? 'Login' : 'Create Account'}</span>
-          <ArrowRight size={16} />
+          {loading ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              <span>{mode === 'login' ? 'Signing in…' : 'Creating account…'}</span>
+            </>
+          ) : (
+            <>
+              <span>{mode === 'login' ? 'Login' : 'Create Account'}</span>
+              <ArrowRight size={16} />
+            </>
+          )}
         </button>
 
         {/* Google Auth */}
@@ -213,13 +315,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
         <button
           type="button"
-          onClick={() =>
-            onLoginSuccess(role, {
-              name: 'Harshal Lad',
-              email: 'harshallad2007@gmail.com'
-            })
-          }
-          className="w-full py-2.5 px-4 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors"
+          disabled={loading}
+          onClick={handleGoogleSignIn}
+          className="w-full py-2.5 px-4 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors disabled:opacity-70"
         >
           {/* Google G SVG */}
           <svg className="w-4 h-4" viewBox="0 0 24 24">

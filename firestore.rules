@@ -1,0 +1,65 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Module 1B & 1C: User Profiles
+    // users/{uid}
+    match /users/{userId} {
+      // Authenticated users can read public profile data (needed for display in reviews)
+      allow read: if isAuthenticated();
+      
+      // Only the user themselves can create or update their own profile document
+      allow create, update: if isOwner(userId);
+      
+      // Deletion of user profile is restricted
+      allow delete: if isOwner(userId);
+    }
+
+    // Module 1H, 1I, 1J, 1L: Reviews
+    // reviews/{reviewId}
+    match /reviews/{reviewId} {
+      // Public review reading is allowed for community transparency
+      allow read: if true;
+
+      // Authenticated users can create reviews, and userId must match request.auth.uid
+      allow create: if isAuthenticated() 
+                    && request.resource.data.userId == request.auth.uid
+                    && request.resource.data.rating >= 1 
+                    && request.resource.data.rating <= 5
+                    && (request.resource.data.targetType == 'food' || request.resource.data.targetType == 'shop');
+
+      // Users can modify or delete only their own reviews (Module 1L)
+      allow update: if isOwner(resource.data.userId)
+                    || (
+                      // Or allow counter increments by authenticated users during like/unlike
+                      isAuthenticated() 
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likesCount', 'dislikesCount'])
+                    );
+      allow delete: if isOwner(resource.data.userId);
+
+      // Module 1K: Likes & Dislikes Subcollections
+      // reviews/{reviewId}/likes/{userId}
+      match /likes/{userId} {
+        allow read: if true;
+        // User can only write their own like reaction
+        allow write: if isOwner(userId);
+      }
+
+      // reviews/{reviewId}/dislikes/{userId}
+      match /dislikes/{userId} {
+        allow read: if true;
+        // User can only write their own dislike reaction
+        allow write: if isOwner(userId);
+      }
+    }
+  }
+}

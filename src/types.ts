@@ -137,3 +137,32 @@ export type SupportedLanguage =
   | 'ta' // தமிழ்
   | 'bn' // বাংলা
   | 'gu'; // ગુજરાતી
+
+export interface UserProfile {
+  uid: string;
+  name: string;
+  email: string;
+  phone?: string;
+  role: UserRole;
+  profileImage?: string;
+  createdAt: string;
+  reviewsCount?: number;
+}
+
+export interface ReviewDocument {
+  reviewId: string;
+  userId: string;
+  userName: string;
+  userProfileImage?: string;
+  targetId: string;
+  targetType: 'food' | 'shop';
+  rating: number;
+  subRatings?: Record<string, number>;
+  reviewText: string;
+  photoUrl?: string;
+  likesCount: number;
+  dislikesCount: number;
+  createdAt: string;
+  userReaction?: 'like' | 'dislike' | null;
+}
+

@@ -5,6 +5,8 @@ import { UserBadge, AppScreen, FoodScanResult, ShopReview, FoodVideo } from '../
 interface ProfileScreenProps {
   name: string;
   username: string;
+  email?: string;
+  role?: string;
   avatarUrl: string;
   badges: UserBadge[];
   reviewsCount: number;
@@ -20,6 +22,8 @@ interface ProfileScreenProps {
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   name = 'Harshal Lad',
   username = '@harshal',
+  email,
+  role = 'user',
   avatarUrl = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
   badges,
   reviewsCount = 24,
@@ -58,11 +62,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <h2 className="text-lg font-black text-slate-900 tracking-tight truncate">
               {name}
             </h2>
-            <p className="text-xs text-orange-600 font-bold tracking-tight">
-              {username}
+            <p className="text-xs text-orange-600 font-bold tracking-tight truncate">
+              {email || username}
             </p>
             <p className="text-[11px] text-slate-500 font-medium mt-0.5">
-              Food Safety Contributor & Vlogger
+              {role === 'shopkeeper' ? '🏪 Shopkeeper Account' : '👤 Food Safety Contributor & Vlogger'}
             </p>
           </div>
         </div>

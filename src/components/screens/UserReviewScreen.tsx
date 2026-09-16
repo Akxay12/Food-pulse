@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed } from 'lucide-react';
+import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2 } from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
 
 interface UserReviewScreenProps {
@@ -13,7 +13,7 @@ interface UserReviewScreenProps {
     subRatings: Record<string, number>;
     reviewText: string;
     photoUrl?: string;
-  }) => void;
+  }) => Promise<void> | void;
 }
 
 export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
@@ -42,6 +42,10 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=400&auto=format&fit=crop&q=80'
   );
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const subLabels =
     targetType === 'shop'
       ? [
@@ -59,17 +63,31 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     setSubRatings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmitReview({
-      targetType,
-      shopId: selectedShopId,
-      rating: overallRating,
-      subRatings,
-      reviewText,
-      photoUrl: photoPreview || undefined,
-    });
+    if (!overallRating || overallRating < 1) {
+      setErrorMessage('Please select a star rating.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await onSubmitReview({
+        targetType,
+        shopId: selectedShopId,
+        rating: overallRating,
+        subRatings,
+        reviewText,
+        photoUrl: photoPreview || undefined,
+      });
+      setSuccessMessage('Review posted successfully!');
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to submit review.');
+      setIsSubmitting(false);
+    }
   };
+
 
   return (
     <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
@@ -242,15 +260,39 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
           )}
         </div>
 
+        {/* Error / Success Feedback */}
+        {errorMessage && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
+            {errorMessage}
+          </div>
+        )}
+        {successMessage && (
+          <div className="p-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-xs font-semibold flex items-center gap-2">
+            <CheckCircle2 size={16} className="text-green-600" />
+            <span>{successMessage}</span>
+          </div>
+        )}
+
         {/* Submit Button */}
         <button
           type="submit"
-          className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-[0.98] text-white font-bold text-sm shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+          disabled={isSubmitting}
+          className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 active:scale-[0.98] text-white font-bold text-sm shadow-md shadow-orange-500/20 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
         >
-          <CheckCircle2 size={18} />
-          <span>Post Review</span>
+          {isSubmitting ? (
+            <>
+              <Loader2 size={18} className="animate-spin" />
+              <span>Posting review…</span>
+            </>
+          ) : (
+            <>
+              <CheckCircle2 size={18} />
+              <span>Post Review</span>
+            </>
+          )}
         </button>
       </form>
     </div>
   );
 };
+

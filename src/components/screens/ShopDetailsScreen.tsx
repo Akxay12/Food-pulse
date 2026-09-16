@@ -1,21 +1,125 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Star, MapPin, Clock, Utensils, ThumbsUp, ThumbsDown, MessageSquareHeart, Share2, ShieldCheck, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Star, MapPin, Clock, Utensils, ThumbsUp, ThumbsDown, MessageSquareHeart, Share2, ShieldCheck, Check, Trash2, Loader2 } from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
+import { reviewService } from '../../services/reviewService';
 
 interface ShopDetailsScreenProps {
   shop: FoodShop;
+  currentUserId?: string;
   onBack: () => void;
   onWriteReview: (shopId: string) => void;
-  onToggleLikeReview: (shopId: string, reviewId: string) => void;
+  onToggleLikeReview?: (shopId: string, reviewId: string) => void;
 }
 
 export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   shop,
+  currentUserId,
   onBack,
   onWriteReview,
   onToggleLikeReview
 }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'reviews'>('overview');
+  const [liveReviews, setLiveReviews] = useState<any[]>(shop.reviews || []);
+  const [loadingReviews, setLoadingReviews] = useState<boolean>(false);
+
+  // Load reviews from Firestore
+  const loadReviews = async () => {
+    setLoadingReviews(true);
+    try {
+      const fetched = await reviewService.getReviews(shop.id, 'shop', currentUserId);
+      if (fetched && fetched.length > 0) {
+        setLiveReviews(
+          fetched.map((f) => ({
+            id: f.reviewId,
+            shopId: f.targetId,
+            userId: f.userId,
+            userName: f.userName,
+            userAvatar: f.userProfileImage || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            rating: f.rating,
+            reviewText: f.reviewText,
+            likeCount: f.likesCount,
+            dislikeCount: f.dislikesCount || 0,
+            date: new Date(f.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+            userLiked: f.userReaction === 'like',
+            userDisliked: f.userReaction === 'dislike'
+          }))
+        );
+      } else {
+        // Fall back to shop's mock reviews if Firestore empty
+        setLiveReviews(shop.reviews || []);
+      }
+    } catch {
+      setLiveReviews(shop.reviews || []);
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
+  useEffect(() => {
+    loadReviews();
+  }, [shop.id, currentUserId]);
+
+  const handleLike = async (reviewId: string) => {
+    if (onToggleLikeReview) {
+      onToggleLikeReview(shop.id, reviewId);
+    }
+    if (!currentUserId) return;
+
+    try {
+      const res = await reviewService.toggleLikeReview(reviewId, currentUserId);
+      setLiveReviews((prev) =>
+        prev.map((r) =>
+          r.id === reviewId
+            ? {
+                ...r,
+                likeCount: res.likesCount,
+                dislikeCount: res.dislikesCount,
+                userLiked: res.userReaction === 'like',
+                userDisliked: false
+              }
+            : r
+        )
+      );
+    } catch (err) {
+      console.warn('Like toggle failed:', err);
+    }
+  };
+
+  const handleDislike = async (reviewId: string) => {
+    if (!currentUserId) return;
+
+    try {
+      const res = await reviewService.toggleDislikeReview(reviewId, currentUserId);
+      setLiveReviews((prev) =>
+        prev.map((r) =>
+          r.id === reviewId
+            ? {
+                ...r,
+                likeCount: res.likesCount,
+                dislikeCount: res.dislikesCount,
+                userDisliked: res.userReaction === 'dislike',
+                userLiked: false
+              }
+            : r
+        )
+      );
+    } catch (err) {
+      console.warn('Dislike toggle failed:', err);
+    }
+  };
+
+  const handleDelete = async (reviewId: string) => {
+    if (!currentUserId) return;
+    if (!window.confirm('Delete your review?')) return;
+
+    try {
+      await reviewService.deleteReview(reviewId, currentUserId);
+      setLiveReviews((prev) => prev.filter((r) => r.id !== reviewId));
+    } catch (err: any) {
+      alert(err.message || 'Could not delete review');
+    }
+  };
+
 
   return (
     <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-8">
@@ -106,7 +210,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          Reviews ({shop.reviews.length})
+          Reviews ({liveReviews.length})
         </button>
       </div>
 
@@ -257,12 +361,17 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
           </div>
 
           <div className="space-y-3">
-            {shop.reviews.length === 0 ? (
+            {loadingReviews ? (
+              <div className="py-8 flex flex-col items-center justify-center text-slate-400 gap-2">
+                <Loader2 size={20} className="animate-spin text-orange-500" />
+                <span className="text-xs">Loading reviews…</span>
+              </div>
+            ) : liveReviews.length === 0 ? (
               <p className="text-xs text-slate-400 italic py-4 text-center">
                 No reviews yet. Be the first to review!
               </p>
             ) : (
-              shop.reviews.map((rev) => (
+              liveReviews.map((rev) => (
                 <div
                   key={rev.id}
                   className="p-3 rounded-xl bg-slate-50 border border-slate-200/60"
@@ -282,11 +391,24 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       </div>
                     </div>
 
-                    {/* Rating stars */}
-                    <div className="flex items-center text-amber-500">
-                      {[...Array(rev.rating)].map((_, i) => (
-                        <Star key={i} size={12} className="fill-amber-500" />
-                      ))}
+                    <div className="flex items-center gap-2">
+                      {/* Rating stars */}
+                      <div className="flex items-center text-amber-500">
+                        {[...Array(rev.rating)].map((_, i) => (
+                          <Star key={i} size={12} className="fill-amber-500" />
+                        ))}
+                      </div>
+
+                      {/* Delete button for review owner (Module 1L) */}
+                      {currentUserId && rev.userId === currentUserId && (
+                        <button
+                          onClick={() => handleDelete(rev.id)}
+                          title="Delete your review"
+                          className="text-slate-400 hover:text-red-500 p-1 rounded-md transition-colors"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -297,14 +419,28 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                   {/* Likes and interaction buttons */}
                   <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60">
                     <div className="flex items-center gap-3">
+                      {/* Like button */}
                       <button
-                        onClick={() => onToggleLikeReview(shop.id, rev.id)}
-                        className={`flex items-center gap-1.5 text-xs font-bold transition-colors ${
+                        onClick={() => handleLike(rev.id)}
+                        className={`flex items-center gap-1 text-xs font-bold transition-colors ${
                           rev.userLiked ? 'text-orange-600' : 'text-slate-500 hover:text-slate-800'
                         }`}
+                        title="Helpful (Like)"
                       >
                         <ThumbsUp size={13} className={rev.userLiked ? 'fill-orange-500 text-orange-500' : ''} />
                         <span>{rev.likeCount}</span>
+                      </button>
+
+                      {/* Dislike button */}
+                      <button
+                        onClick={() => handleDislike(rev.id)}
+                        className={`flex items-center gap-1 text-xs font-bold transition-colors ${
+                          rev.userDisliked ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
+                        }`}
+                        title="Not helpful (Dislike)"
+                      >
+                        <ThumbsDown size={13} className={rev.userDisliked ? 'fill-slate-700 text-slate-700' : ''} />
+                        {rev.dislikeCount > 0 && <span>{rev.dislikeCount}</span>}
                       </button>
                     </div>
 
