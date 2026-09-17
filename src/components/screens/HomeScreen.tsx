@@ -1,6 +1,7 @@
 import React from 'react';
 import { Camera, MapPin, Star, Bell, ArrowRight, ShieldCheck, Flame, MessageSquareHeart, Sparkles } from 'lucide-react';
 import { FoodScanResult, FoodShop, AppScreen } from '../../types';
+import { LogoPlaceholder } from '../common/Logo';
 
 interface HomeScreenProps {
   userName?: string;
@@ -16,9 +17,9 @@ interface HomeScreenProps {
 }
 
 export const HomeScreen: React.FC<HomeScreenProps> = ({
-  userName = 'Harshal',
+  userName = '',
   userAvatar = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-  unreadNotificationsCount = 2,
+  unreadNotificationsCount = 0,
   recentScans,
   nearbyShops,
   onOpenScanner,
@@ -29,23 +30,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 }) => {
   return (
     <div className="flex-1 overflow-y-auto pb-6 bg-[#FAF7F2]">
-      {/* Top App Bar with Greeting, Avatar & Notifications */}
+      {/* Top App Bar: Logo placeholder left, notification bell right */}
       <div className="bg-white px-5 pt-4 pb-4 border-b border-slate-100 flex items-center justify-between sticky top-0 z-30 shadow-xs">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => onNavigate('profile')}
-            className="relative focus:outline-hidden"
-          >
-            <img
-              src={userAvatar}
-              alt={userName}
-              className="w-10 h-10 rounded-full object-cover ring-2 ring-amber-500/30 shadow-xs"
-            />
-            <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-amber-500 ring-2 ring-white"></span>
-          </button>
+          <LogoPlaceholder size="sm" />
           <div>
             <h1 className="text-base font-bold text-slate-900 tracking-tight leading-snug">
-              {t.greeting || `Good Morning, ${userName} 👋`}
+              {userName ? `Good Morning, ${userName} 👋` : (t.greeting || 'Good Morning 👋')}
             </h1>
             <p className="text-[11px] text-slate-500 font-medium">
               Eat smarter with FoodCheck AI

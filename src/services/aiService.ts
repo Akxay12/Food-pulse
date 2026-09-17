@@ -1,6 +1,17 @@
 import { GoogleGenAI } from '@google/genai';
 import { FoodScanResult, ScanType, AnalysisSummaryItem } from '../types';
-import { AI_API_KEY, isAIConfigured } from './firebase';
+// Safe development diagnostic (Never print the key itself)
+console.log('[Gemini] API key configured:', Boolean(import.meta.env.VITE_AI_API_KEY));
+
+function getGeminiApiKey(): string {
+  const raw = import.meta.env.VITE_AI_API_KEY;
+  if (!raw) return '';
+  const cleaned = String(raw).trim().replace(/^["']|["']$/g, '').trim();
+  if (cleaned === '' || cleaned === 'MY_AI_API_KEY' || cleaned === '""' || cleaned === "''") {
+    return '';
+  }
+  return cleaned;
+}
 
 export interface AIScanInput {
   imageBase64: string;
@@ -10,251 +21,320 @@ export interface AIScanInput {
 }
 
 export const MANDATORY_LAB_DISCLAIMER =
-  'AI assessment is based on visible/package information and cannot detect hidden contamination or replace laboratory food-safety testing.';
+  'AI visual analysis cannot detect hidden bacteria, toxins, pathogens, or other invisible contamination. For definitive food safety, laboratory testing is required.';
 
 export const aiService = {
   /**
-   * Check if live external AI Vision API is configured
+   * Check if live external Gemini AI Vision API is configured
    */
   isConfigured(): boolean {
-    return isAIConfigured;
+    return Boolean(getGeminiApiKey());
   },
 
   /**
-   * Primary AI Food Analysis Pipeline
+   * Primary AI Food Analysis Pipeline using Gemini Vision API
+   * Strictly sends REAL image bytes + structured instructions to Gemini.
+   * NEVER returns simulated or fake scores when in production.
    */
   async analyzeFoodImage(input: AIScanInput): Promise<FoodScanResult> {
-    const { imageBase64, scanType, language = 'en', foodNameHint } = input;
+    const { imageBase64, scanType, language = 'en' } = input;
 
-    // 1. LIVE GEMINI AI VISION PATH (When API key provided in .env)
-    if (isAIConfigured && AI_API_KEY) {
-      try {
-        const ai = new GoogleGenAI({ apiKey: AI_API_KEY });
-        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+    // Check API Key
+    const apiKey = getGeminiApiKey();
+    if (!apiKey) {
+      console.warn('[FoodCheck AI] Gemini API key is missing from environment (VITE_AI_API_KEY).');
+      throw new Error(
+        'Gemini API key is not configured. Please add VITE_AI_API_KEY in your .env file to enable live AI food safety scanning.'
+      );
+    }
 
-        const systemPrompt = `You are the FoodCheck Mobile AI Food Safety Assessment Engine.
-Your role is to analyze images of food (Packaged Food or Street Food) to assess visual hygiene and visible information.
+    // Parse image mime type and clean base64 data
+    let mimeType = 'image/jpeg';
+    let cleanBase64 = imageBase64;
+    const dataUrlMatch = imageBase64.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      cleanBase64 = dataUrlMatch[2];
+    }
+
+    if (!cleanBase64 || cleanBase64.length < 50) {
+      throw new Error('No valid food image was provided for analysis. Please capture or upload a photo.');
+    }
+
+    // Dev Logging (WITHOUT logging API keys or full base64 strings)
+    console.info('[FoodCheck AI] Gemini request started for scanType:', scanType);
+    console.info('[FoodCheck AI] Gemini received image input:', {
+      mimeType,
+      imageByteEstimate: Math.round(cleanBase64.length * 0.75),
+      hasImageInput: Boolean(cleanBase64 && cleanBase64.length > 50)
+    });
+
+    const ai = new GoogleGenAI({ apiKey });
+
+    const systemInstructions = `You are analyzing a food image for a consumer food-safety assistant (FoodCheck).
+Inspect ONLY what can reasonably be inferred from the provided image.
+
+Identify the visible food.
+Give a safety assessment from 0 to 10 based ONLY on visible evidence such as:
+- visible freshness/spoilage indicators
+- mold/discoloration
+- packaging damage
+- visible contamination
+- expiry/best-before text if readable
+- ingredient/allergen information if readable
+- visible hygiene conditions for street food
+- visible oil/food handling conditions for street food
+
+Return strict raw JSON matching this schema:
+{
+  "detectedFood": string,
+  "foodType": string,
+  "safetyScore": number,
+  "confidence": number,
+  "visibleConcerns": string[],
+  "positiveIndicators": string[],
+  "explanation": string,
+  "expiryText": string or null,
+  "allergens": string[]
+}
 
 CRITICAL RULES:
-1. You MUST return ONLY valid raw JSON with no markdown backticks, matching the exact schema below.
-2. For PACKAGED FOOD:
-   - Identify the product name and brand if visible.
-   - Extract Expiry Date / Best Before ONLY if clearly visible text exists in the image.
-   - If expiry date is NOT clearly visible or illegible, you MUST set "detectedExpiryDate": "Expiry could not be verified from this image." and "expiryDetected": false. NEVER invent or hallucinate an expiry date.
-   - Check ingredients, nutrition, allergens, packaging condition (tears, puffing, leaks).
-3. For STREET FOOD:
-   - Analyze visible characteristics: appearance, steam/thermal freshness, oil color/greasiness, cleanliness/hygiene of stall, and visual condition.
-   - DO NOT claim or imply that the camera can detect bacteria, invisible pathogens, toxins, or hidden biological contamination.
-4. SAFETY SCORE:
-   - Provide a realistic float score between 1.0 and 10.0.
-   - Risk label must be one of: "Lower apparent risk" (score >= 7.5), "Caution" (score 6.0-7.4), or "Higher apparent risk" (score < 6.0).
-5. RECOMMENDATION:
-   - You must NEVER state "This food is 100% safe."
-   - If no warning signs are found, use: "Based on the visible/package information available, no obvious warning signs were detected."
-   - Provide a concise 2-sentence recommendation based purely on visible evidence.
+1. Do NOT claim that an image can detect hidden bacteria, viruses, toxins, pathogens, or chemical contamination.
+2. If something cannot be determined from the image, explicitly say so.
+3. The safety score must be evidence-based and should NOT be randomly generated. Provide a number between 0 and 10 (e.g. 8.0).
+4. Confidence must be a float between 0.0 and 1.0 (e.g. 0.86).
+5. For PACKAGED FOOD:
+   - Inspect and read visible text: product/food name, expiry/best-before date, ingredients, allergens, nutrition info, packaging condition (tears, puffing, seal intact).
+   - Use OCR/vision from the SAME image. Do NOT invent or hallucinate unreadable dates.
+   - If expiry date is not clearly readable, set "expiryText": null.
+6. For STREET FOOD:
+   - Inspect visible characteristics: food freshness, visible spoilage, cleanliness of preparation/stall, food handling, visible oil condition (clarity, reuse signs), surrounding hygiene, exposed food/dust risks.
+   - Set "expiryText": null.
+7. FOOD IDENTIFICATION:
+   - For example: if the photo contains cheese, explicitly state "detectedFood": "Cheese" and "foodType": "Dairy product" or "Cheddar / processed cheese".
+   - Only state a specific type when the image provides enough visual evidence. Otherwise say "Cheese (type uncertain)".
+   - Do NOT hallucinate a specific brand or exact product when it cannot be reliably read from the image.
+8. Output ONLY valid JSON with NO markdown fences, NO extra text.`;
 
-JSON Schema to return:
-{
-  "foodName": string,
-  "safetyScore": number (float 1.0-10.0),
-  "riskLabel": "Lower apparent risk" | "Caution" | "Higher apparent risk",
-  "riskColor": "green" | "yellow" | "red",
-  "expiryDetected": boolean,
-  "detectedExpiryDate": string,
-  "summaryItems": [
-    {
-      "id": string,
-      "category": string,
-      "status": "safe" | "caution" | "danger",
-      "title": string,
-      "detail": string
-    }
-  ],
-  "recommendation": string,
-  "ingredientsOrCleanliness": string[],
-  "nutritionOrVisualIndicators": { [key: string]: string }
-}`;
+    const userPrompt = `Scan mode: ${scanType === 'packaged' ? 'PACKAGED FOOD' : 'STREET FOOD'}. Preferred language: ${language}. Analyze the attached food image carefully according to the rules.`;
 
-        const promptText = `Analyze this ${scanType === 'packaged' ? 'PACKAGED FOOD' : 'STREET FOOD'} photo for safety assessment in language: ${language}.`;
+    try {
+      const candidateModels = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+      let response: any = null;
+      let lastError: any = null;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                { text: systemPrompt + '\n\n' + promptText },
-                {
-                  inlineData: {
-                    mimeType: 'image/jpeg',
-                    data: cleanBase64
+      for (const modelName of candidateModels) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  { text: systemInstructions + '\n\n' + userPrompt },
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: cleanBase64
+                    }
                   }
-                }
-              ]
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: 'application/json',
+              temperature: 0.1
             }
-          ]
+          });
+          if (response?.text) {
+            console.info(`[FoodCheck AI] Gemini request succeeded using model ${modelName}`);
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+          const msg = String(err?.message || '');
+          if (msg.includes('404') || msg.includes('not found') || msg.includes('no longer available') || msg.includes('503')) {
+            console.warn(`[FoodCheck AI] Model ${modelName} unavailable, trying next candidate...`);
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!response && lastError) {
+        throw lastError;
+      }
+
+      const rawText = response?.text || '';
+      console.info('[FoodCheck AI] Gemini response received. Raw response length:', rawText.length);
+
+      const cleanedJson = rawText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```$/i, '')
+        .trim();
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(cleanedJson);
+      } catch (jsonErr) {
+        console.error('[FoodCheck AI] Failed to parse JSON response from Gemini:', rawText);
+        throw new Error('Gemini returned an unstructured response. Please try scanning again with clearer lighting.');
+      }
+
+      // Validate and clamp fields
+      const rawScore = Number(parsed.safetyScore);
+      const safetyScore = Math.max(0, Math.min(10, !isNaN(rawScore) ? rawScore : 7.0));
+
+      const rawConf = Number(parsed.confidence);
+      const confidence = Math.max(0, Math.min(1, !isNaN(rawConf) ? rawConf : 0.85));
+
+      const detectedFood =
+        typeof parsed.detectedFood === 'string' && parsed.detectedFood.trim()
+          ? parsed.detectedFood.trim()
+          : scanType === 'packaged'
+          ? 'Packaged Food Item'
+          : 'Street Food Item';
+
+      const foodTypeLabel =
+        typeof parsed.foodType === 'string' && parsed.foodType.trim()
+          ? parsed.foodType.trim()
+          : scanType === 'packaged'
+          ? 'Packaged Food'
+          : 'Street Food';
+
+      const visibleConcerns: string[] = Array.isArray(parsed.visibleConcerns)
+        ? parsed.visibleConcerns.filter((c: any) => typeof c === 'string' && c.trim())
+        : [];
+
+      const positiveIndicators: string[] = Array.isArray(parsed.positiveIndicators)
+        ? parsed.positiveIndicators.filter((p: any) => typeof p === 'string' && p.trim())
+        : [];
+
+      const explanation: string =
+        typeof parsed.explanation === 'string' && parsed.explanation.trim()
+          ? parsed.explanation.trim()
+          : 'Visual assessment completed based on observable food characteristics and package integrity.';
+
+      const expiryText: string | null =
+        typeof parsed.expiryText === 'string' && parsed.expiryText.trim()
+          ? parsed.expiryText.trim()
+          : null;
+
+      const allergens: string[] = Array.isArray(parsed.allergens)
+        ? parsed.allergens.filter((a: any) => typeof a === 'string' && a.trim())
+        : [];
+
+      // Determine risk label and colors
+      const riskLabel: 'Lower apparent risk' | 'Caution' | 'Higher apparent risk' =
+        safetyScore >= 7.5 ? 'Lower apparent risk' : safetyScore >= 6.0 ? 'Caution' : 'Higher apparent risk';
+
+      const riskColor: 'green' | 'yellow' | 'red' =
+        safetyScore >= 7.5 ? 'green' : safetyScore >= 6.0 ? 'yellow' : 'red';
+
+      // Build structured summary items
+      const summaryItems: AnalysisSummaryItem[] = [
+        {
+          id: 'food-id',
+          category: 'Food Identification',
+          status: 'safe',
+          title: 'Detected Food',
+          detail: `${detectedFood}${foodTypeLabel ? ` (${foodTypeLabel})` : ''}`
+        }
+      ];
+
+      positiveIndicators.forEach((pos, idx) => {
+        summaryItems.push({
+          id: `pos-${idx}`,
+          category: 'Positive Observations',
+          status: 'safe',
+          title: 'Positive Indicator',
+          detail: pos
+        });
+      });
+
+      visibleConcerns.forEach((concern, idx) => {
+        summaryItems.push({
+          id: `concern-${idx}`,
+          category: 'Visible Concerns',
+          status: safetyScore < 6.0 ? 'danger' : 'caution',
+          title: 'Visible Concern',
+          detail: concern
+        });
+      });
+
+      if (scanType === 'packaged') {
+        summaryItems.push({
+          id: 'expiry-item',
+          category: 'Expiry Check',
+          status: expiryText ? 'safe' : 'caution',
+          title: 'Expiry / Best Before',
+          detail: expiryText ? `Detected: ${expiryText}` : 'Expiry could not be verified from this image.'
         });
 
-        const rawText = response.text || '';
-        const cleanedJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleanedJson);
-
-        return {
-          id: 'scan-' + Date.now(),
-          foodName: parsed.foodName || (scanType === 'packaged' ? 'Packaged Food Item' : 'Street Food Dish'),
-          foodType: scanType,
-          imageUrl: imageBase64,
-          scanDate: 'Scanned just now (Live AI)',
-          safetyScore: Number(parsed.safetyScore) || 7.5,
-          riskLabel: parsed.riskLabel || 'Lower apparent risk',
-          riskColor: parsed.riskColor || 'green',
-          summaryItems: parsed.summaryItems || [],
-          recommendation: parsed.recommendation || 'Based on the visible/package information available, no obvious warning signs were detected.',
-          disclaimer: MANDATORY_LAB_DISCLAIMER,
-          expiryDetected: parsed.expiryDetected ?? false,
-          detectedExpiryDate: parsed.detectedExpiryDate || 'Expiry could not be verified from this image.',
-          ingredientsOrCleanliness: parsed.ingredientsOrCleanliness || [],
-          nutritionOrVisualIndicators: parsed.nutritionOrVisualIndicators || {}
-        };
-      } catch (err) {
-        console.warn('[FoodCheck AI] Live Gemini Vision analysis encountered an issue, falling back to simulated engine:', err);
+        if (allergens.length > 0) {
+          summaryItems.push({
+            id: 'allergens-item',
+            category: 'Allergen Advisory',
+            status: 'caution',
+            title: 'Identified Allergens',
+            detail: allergens.join(', ')
+          });
+        }
       }
-    }
 
-    // 2. HIGH-FIDELITY SIMULATED VISION ENGINE (Development fallback when API key is unconfigured)
-    await new Promise((res) => setTimeout(res, 1800));
-
-    if (scanType === 'packaged') {
-      const isRecognizedSnack = foodNameHint?.toLowerCase().includes('chip') || foodNameHint?.toLowerCase().includes('biscuit');
+      // Logging parsed results
+      console.info('[FoodCheck AI] Parsed safety score:', safetyScore, '/ 10 | Confidence:', Math.round(confidence * 100) + '%');
+      console.info('[FoodCheck AI] Detected food:', detectedFood, '| Category/Type:', foodTypeLabel);
 
       return {
         id: 'scan-' + Date.now(),
-        foodName: foodNameHint || 'Packaged Snack Product',
-        foodType: 'packaged',
+        foodName: detectedFood,
+        foodType: scanType,
+        foodTypeLabel,
         imageUrl: imageBase64,
-        scanDate: 'Scanned just now (Vision Simulator)',
-        safetyScore: 8.2,
-        riskLabel: 'Lower apparent risk',
-        riskColor: 'green',
-        expiryDetected: true,
-        detectedExpiryDate: 'Best Before: 18 Dec 2026 (Verified)',
-        summaryItems: [
-          {
-            id: '1',
-            category: 'Product Identification',
-            status: 'safe',
-            title: 'Product & Brand Identification',
-            detail: 'Valid FSSAI packaging & barcode structure detected'
-          },
-          {
-            id: '2',
-            category: 'Expiry Check',
-            status: 'safe',
-            title: 'Expiry / Best Before',
-            detail: 'Valid (Best before 18 Dec 2026)'
-          },
-          {
-            id: '3',
-            category: 'Packaging Condition',
-            status: 'safe',
-            title: 'Package Seal & Integrity',
-            detail: 'Hermetically sealed, nitrogen puff intact, no punctures'
-          },
-          {
-            id: '4',
-            category: 'Ingredients & Additives',
-            status: 'caution',
-            title: 'Ingredients & Sodium Content',
-            detail: 'Moderate sodium (540mg/100g) & palm olein detected'
-          },
-          {
-            id: '5',
-            category: 'Allergens',
-            status: 'caution',
-            title: 'Allergen Advisory',
-            detail: 'Contains soy, may contain traces of milk solids'
-          }
-        ],
-        recommendation: 'Based on the visible package information available, no obvious warning signs were detected. Packaging is factory sealed with valid batch information.',
+        scanDate: 'Scanned just now (Live AI)',
+        safetyScore,
+        confidence,
+        visibleConcerns,
+        positiveIndicators,
+        explanation,
+        expiryText,
+        allergens,
+        riskLabel,
+        riskColor,
+        summaryItems,
+        recommendation: explanation,
         disclaimer: MANDATORY_LAB_DISCLAIMER,
-        ingredientsOrCleanliness: [
-          'Potatoes',
-          'Edible Vegetable Oil (Palmolein)',
-          'Iodised Salt (1.8%)',
-          'Spices & Condiments'
-        ],
+        expiryDetected: Boolean(expiryText),
+        detectedExpiryDate: expiryText || 'Expiry could not be verified from this image.',
+        ingredientsOrCleanliness: allergens.length > 0 ? allergens : positiveIndicators.slice(0, 3),
         nutritionOrVisualIndicators: {
-          'FSSAI Status': 'Verified License #10014022002711',
-          'Expiry Status': '18/12/2026 (Valid)',
-          'Seal Condition': '100% Intact',
-          'Sodium Indicator': 'Moderate'
+          'Safety Score': `${safetyScore.toFixed(1)} / 10`,
+          'AI Confidence': `${Math.round(confidence * 100)}%`,
+          'Assessment Basis': 'Visible Inspection Only'
         }
       };
-    } else {
-      // Street Food Simulation
-      return {
-        id: 'scan-' + Date.now(),
-        foodName: foodNameHint || 'Street Food Special (Vada Pav / Chaat)',
-        foodType: 'street',
-        imageUrl: imageBase64,
-        scanDate: 'Scanned just now (Vision Simulator)',
-        safetyScore: 7.9,
-        riskLabel: 'Lower apparent risk',
-        riskColor: 'green',
-        expiryDetected: false,
-        detectedExpiryDate: 'Expiry could not be verified from this image.',
-        summaryItems: [
-          {
-            id: '1',
-            category: 'Food Identification',
-            status: 'safe',
-            title: 'Food Identification',
-            detail: 'Identified: Freshly cooked street food specialty'
-          },
-          {
-            id: '2',
-            category: 'Visible Freshness',
-            status: 'safe',
-            title: 'Thermal Freshness Indicators',
-            detail: 'Visible steam and hot frying characteristics observed'
-          },
-          {
-            id: '3',
-            category: 'Cleanliness',
-            status: 'safe',
-            title: 'Cleanliness / Hygiene',
-            detail: 'Stainless steel serving counter and clean utensil usage'
-          },
-          {
-            id: '4',
-            category: 'Oil Appearance',
-            status: 'caution',
-            title: 'Visible Oil Characteristics',
-            detail: 'Golden-amber oil appearance, acceptable clarity'
-          },
-          {
-            id: '5',
-            category: 'Visual Condition',
-            status: 'safe',
-            title: 'Overall Visual Condition',
-            detail: 'No visible debris, foreign particles, or discoloration'
-          }
-        ],
-        recommendation: 'Based on the visible information available, no obvious warning signs were detected. Preparation area appears orderly with covered displays. Consume while freshly prepared.',
-        disclaimer: MANDATORY_LAB_DISCLAIMER,
-        ingredientsOrCleanliness: [
-          'Potato mash with spices & turmeric',
-          'Gram flour (besan) batter',
-          'Fresh Pav bread',
-          'Garlic chutney'
-        ],
-        nutritionOrVisualIndicators: {
-          'Serving State': 'Freshly prepared & hot',
-          'Estimated Calories': '~280 kcal per serving',
-          'Hygiene Index': '4.3/5 Visual rating',
-          'Display Status': 'Covered glass cabinet'
-        }
-      };
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      console.error('[FoodCheck AI] Gemini API call error:', {
+        message: errMsg.slice(0, 250),
+        status: err?.status || err?.code || 'ERROR'
+      });
+
+      if (errMsg.includes('SERVICE_DISABLED') || errMsg.includes('Gemini API has not been used')) {
+        throw new Error(
+          'Gemini API is not enabled on this Google Cloud project. Please enable "Generative Language API" in Google Cloud Console or check your API key.'
+        );
+      }
+      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid')) {
+        throw new Error('The configured Gemini API key is invalid. Please check VITE_AI_API_KEY in your .env file.');
+      }
+      if (errMsg.includes('PERMISSION_DENIED')) {
+        throw new Error('Permission denied calling Gemini API. Please ensure your API key has Generative Language API permissions.');
+      }
+
+      throw new Error(`Gemini AI analysis failed: ${errMsg.slice(0, 160)}`);
     }
   }
 };

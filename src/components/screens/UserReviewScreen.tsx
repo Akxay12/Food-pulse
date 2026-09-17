@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2, AlertCircle, X } from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
+import { shopService } from '../../services/shopService';
 
 interface UserReviewScreenProps {
   shops: FoodShop[];
@@ -41,16 +42,15 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     Quality: 4,
   });
 
-  const [reviewText, setReviewText] = useState(
-    'Food was fresh and the stall was impeccably clean. The server wore caps and handled food with care!'
-  );
-  const [photoPreview, setPhotoPreview] = useState<string | null>(
-    'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=400&auto=format&fit=crop&q=80'
-  );
+  const [reviewText, setReviewText] = useState('');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentSubRatings = targetType === 'shop' ? shopSubRatings : foodSubRatings;
 
@@ -59,6 +59,14 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
       setShopSubRatings((prev) => ({ ...prev, [key]: value }));
     } else {
       setFoodSubRatings((prev) => ({ ...prev, [key]: value }));
+    }
+  };
+
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setPhotoFile(file);
+      setPhotoPreview(URL.createObjectURL(file));
     }
   };
 
@@ -76,15 +84,23 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
+      let finalPhotoUrl: string | undefined = undefined;
+      if (photoFile) {
+        finalPhotoUrl = await shopService.uploadShopMedia(photoFile, selectedShopId || 'user', 'stall');
+      }
+
       await onSubmitReview({
         targetType,
         shopId: selectedShopId,
         rating: overallRating,
         subRatings: currentSubRatings,
         reviewText: reviewText.trim(),
-        photoUrl: photoPreview || undefined,
+        photoUrl: finalPhotoUrl,
       });
-      setSuccessMessage('Review posted successfully!');
+      setSuccessMessage('Review & experience posted successfully!');
+      setTimeout(() => {
+        onBack();
+      }, 700);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to submit review.');
       setIsSubmitting(false);
@@ -232,32 +248,40 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
         {/* Optional Add Food Photo */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
           <label className="block text-xs font-bold text-slate-700 mb-2">
-            Add Food Photo (Optional)
+            Add Food / Stall Photo (Optional)
           </label>
 
+          <input
+            type="file"
+            ref={fileInputRef}
+            accept="image/*"
+            className="hidden"
+            onChange={handlePhotoSelect}
+          />
+
           {photoPreview ? (
-            <div className="relative rounded-xl overflow-hidden h-28 w-full border border-slate-200">
+            <div className="relative rounded-xl overflow-hidden h-32 w-full border border-slate-200">
               <img src={photoPreview} alt="Review attachment" className="w-full h-full object-cover" />
               <button
                 type="button"
-                onClick={() => setPhotoPreview(null)}
-                className="absolute top-2 right-2 bg-black/60 text-white rounded-full p-1 text-xs cursor-pointer"
+                onClick={() => {
+                  setPhotoPreview(null);
+                  setPhotoFile(null);
+                }}
+                className="absolute top-2 right-2 bg-black/70 text-white rounded-full p-1.5 text-xs cursor-pointer hover:bg-black"
+                title="Remove photo"
               >
-                ✕
+                <X size={14} />
               </button>
             </div>
           ) : (
             <button
               type="button"
-              onClick={() =>
-                setPhotoPreview(
-                  'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=400&auto=format&fit=crop&q=80'
-                )
-              }
+              onClick={() => fileInputRef.current?.click()}
               className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-700 transition-colors cursor-pointer"
             >
               <Camera size={18} />
-              <span className="text-xs font-semibold">Attach Food / Stall Photo</span>
+              <span className="text-xs font-semibold">Take or Select Real Photo</span>
             </button>
           )}
         </div>

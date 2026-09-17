@@ -1,5 +1,7 @@
 import { doc, getDoc, updateDoc, increment } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { updateProfile } from 'firebase/auth';
+import { auth, db, storage, isFirebaseConfigured } from './firebase';
 import { UserProfile } from '../types';
 
 const STORAGE_USERS_KEY = 'foodcheck_local_users';
@@ -174,5 +176,47 @@ export const userService = {
     } catch {
       // Ignore
     }
+  },
+
+  /**
+   * Upload real profile photo to Firebase Storage avatars/{userId} and update profile
+   */
+  async uploadAvatar(file: File | Blob, userId: string): Promise<string> {
+    if (isFirebaseConfigured && storage && userId) {
+      try {
+        const timestamp = Date.now();
+        const rawName = (file as File).name || 'avatar.jpg';
+        const ext = rawName.split('.').pop() || 'jpg';
+        const path = `avatars/${userId}/avatar_${timestamp}.${ext}`;
+        const storageRef = ref(storage, path);
+        const contentType = file.type || 'image/jpeg';
+        await uploadBytes(storageRef, file, { contentType });
+        const downloadUrl = await getDownloadURL(storageRef);
+
+        await this.updateUserProfile(userId, { profileImage: downloadUrl });
+
+        if (auth?.currentUser) {
+          try {
+            await updateProfile(auth.currentUser, { photoURL: downloadUrl });
+          } catch {
+            // Ignore auth profile update failure
+          }
+        }
+        return downloadUrl;
+      } catch (err) {
+        console.warn('Error uploading avatar to Firebase Storage:', err);
+      }
+    }
+
+    // Local fallback: FileReader data URL
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const url = (e.target?.result as string) || '';
+        await this.updateUserProfile(userId, { profileImage: url });
+        resolve(url);
+      };
+      reader.readAsDataURL(file);
+    });
   }
 };

@@ -9,9 +9,9 @@ import {
   where,
   orderBy
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from './firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage, isFirebaseConfigured } from './firebase';
 import { FoodShop, ShopDocument, MenuItem } from '../types';
-import { INITIAL_SHOPS } from '../data/mockData';
 
 const STORAGE_SHOPS_KEY = 'foodcheck_local_shops';
 
@@ -51,14 +51,7 @@ function getLocalShops(): FoodShop[] {
   } catch {
     // Ignore
   }
-
-  const initial = INITIAL_SHOPS.map((s) => ({
-    ...s,
-    isPublished: true,
-    ownerId: s.ownerId || 'owner-sample-1'
-  }));
-  saveLocalShops(initial);
-  return initial;
+  return [];
 }
 
 function saveLocalShops(shops: FoodShop[]) {
@@ -71,56 +64,75 @@ function saveLocalShops(shops: FoodShop[]) {
 
 export const shopService = {
   /**
-   * Fetch all published FoodCheck registered shops for the shared map
+   * Fetch all published FoodCheck registered shops for the shared map.
+   * Strictly returns registered FoodCheck stalls from Firestore.
    */
-  async getPublishedShops(userLocation?: { lat: number; lng: number }): Promise<FoodShop[]> {
+  async getPublishedShops(userLocation?: { lat: number; lng: number } | null): Promise<FoodShop[]> {
     let shopsList: FoodShop[] = [];
+    let firestoreQueried = false;
 
     // LIVE FIREBASE PATH
     if (isFirebaseConfigured && db) {
       try {
+        console.info('[FoodCheck Maps] Firestore FoodCheck shop query started (shops collection, isPublished == true)...');
         const shopsRef = collection(db, 'shops');
         const q = query(shopsRef, where('isPublished', '==', true));
         const snapshot = await getDocs(q);
+        firestoreQueried = true;
 
         if (!snapshot.empty) {
-          shopsList = snapshot.docs.map((docSnap) => {
-            const data = docSnap.data();
-            return {
-              id: data.shopId || docSnap.id,
-              ownerId: data.ownerId,
-              name: data.shopName || data.name,
-              category: data.category,
-              imageUrl: data.shopImage || data.imageUrl,
-              distance: '0.5 km',
-              distanceMeters: 500,
-              rating: data.rating || 4.5,
-              isOpen: typeof data.isOpen === 'boolean' ? data.isOpen : true,
-              isPublished: data.isPublished,
-              isPopular: data.isPopular || false,
-              openingTime: data.openingTime || '08:00 AM',
-              closingTime: data.closingTime || '10:00 PM',
-              foodQualityRating: data.foodQualityRating || 4.6,
-              hygieneRating: data.hygieneRating || 4.5,
-              serviceRating: data.serviceRating || 4.4,
-              address: data.address || 'Local Street Food Area',
-              lat: data.latitude || data.lat || 19.0178,
-              lng: data.longitude || data.lng || 72.8478,
-              description: data.description || '',
-              menuCardImage: data.menuImage || data.menuCardImage,
-              menuItems: data.menuItems || [],
-              reviews: data.reviews || []
-            };
-          });
+          shopsList = snapshot.docs
+            .map((docSnap) => {
+              const data = docSnap.data();
+              const lat = Number(data.location?.latitude ?? data.latitude ?? data.lat);
+              const lng = Number(data.location?.longitude ?? data.longitude ?? data.lng);
+
+              // Exclude any shops without valid GPS coordinates
+              if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) {
+                return null;
+              }
+
+              return {
+                id: data.shopId || docSnap.id,
+                ownerId: data.ownerId,
+                name: data.shopName || data.name || 'FoodCheck Stall',
+                category: data.category || 'Street Food',
+                imageUrl: data.shopImage || data.imageUrl || '',
+                distance: '',
+                distanceMeters: Infinity,
+                rating: typeof data.rating === 'number' ? data.rating : 0,
+                reviewsCount: typeof data.reviewsCount === 'number' ? data.reviewsCount : 0,
+                isOpen: typeof data.isOpen === 'boolean' ? data.isOpen : true,
+                isPublished: data.isPublished ?? true,
+                isPopular: data.isPopular || false,
+                openingTime: data.openingTime || '08:00 AM',
+                closingTime: data.closingTime || '10:00 PM',
+                foodQualityRating: typeof data.foodQualityRating === 'number' ? data.foodQualityRating : 0,
+                hygieneRating: typeof data.hygieneRating === 'number' ? data.hygieneRating : 0,
+                serviceRating: typeof data.serviceRating === 'number' ? data.serviceRating : 0,
+                address: data.address || '',
+                lat,
+                lng,
+                description: data.description || '',
+                menuCardImage: data.menuImage || data.menuCardImage || '',
+                menuItems: Array.isArray(data.menuItems) ? data.menuItems : [],
+                reviews: Array.isArray(data.reviews) ? data.reviews : [],
+                createdAt: data.createdAt,
+                updatedAt: data.updatedAt
+              } as FoodShop;
+            })
+            .filter((s): s is FoodShop => s !== null);
         }
+        console.info('[FoodCheck Maps] Firestore FoodCheck shop query completed. Number of FoodCheck shops returned:', shopsList.length);
       } catch (err) {
-        console.warn('Failed to fetch published shops from Firestore, using local data:', err);
+        console.warn('[FoodCheck Maps] Failed to fetch published shops from Firestore, checking local storage:', err);
       }
     }
 
-    // If Firestore yielded no shops or failed, use local shops
-    if (shopsList.length === 0) {
+    // Only fallback to local storage if Firestore was NOT queried (e.g. offline/error)
+    if (!firestoreQueried) {
       shopsList = getLocalShops();
+      console.info('[FoodCheck Maps] Local storage FoodCheck shops count:', shopsList.length);
     }
 
     // Compute dynamic distance if userLocation provided
@@ -138,7 +150,7 @@ export const shopService = {
           distance: formatDistance(distMeters)
         };
       });
-      // Sort by distance
+      // Sort nearest first
       shopsList.sort((a, b) => a.distanceMeters - b.distanceMeters);
     }
 
@@ -162,29 +174,36 @@ export const shopService = {
         const snapshot = await getDoc(shopRef);
         if (snapshot.exists()) {
           const data = snapshot.data();
+          const lat = Number(data.latitude ?? data.lat);
+          const lng = Number(data.longitude ?? data.lng);
+
           return {
             id: data.shopId || snapshot.id,
             ownerId: data.ownerId,
-            name: data.shopName || data.name,
-            category: data.category,
-            imageUrl: data.shopImage || data.imageUrl,
-            distance: '0.4 km',
-            distanceMeters: 400,
-            rating: data.rating || 4.5,
+            name: data.shopName || data.name || 'FoodCheck Stall',
+            category: data.category || 'Street Food',
+            imageUrl: data.shopImage || data.imageUrl || '',
+            distance: '',
+            distanceMeters: 0,
+            rating: typeof data.rating === 'number' ? data.rating : 0,
+            reviewsCount: typeof data.reviewsCount === 'number' ? data.reviewsCount : 0,
             isOpen: data.isOpen ?? true,
             isPublished: data.isPublished ?? true,
-            openingTime: data.openingTime,
-            closingTime: data.closingTime,
-            foodQualityRating: data.foodQualityRating || 4.6,
-            hygieneRating: data.hygieneRating || 4.5,
-            serviceRating: data.serviceRating || 4.4,
-            address: data.address,
-            lat: data.latitude || data.lat,
-            lng: data.longitude || data.lng,
-            description: data.description,
-            menuCardImage: data.menuImage || data.menuCardImage,
-            menuItems: data.menuItems || [],
-            reviews: data.reviews || []
+            isPopular: data.isPopular || false,
+            openingTime: data.openingTime || '08:00 AM',
+            closingTime: data.closingTime || '10:00 PM',
+            foodQualityRating: typeof data.foodQualityRating === 'number' ? data.foodQualityRating : 0,
+            hygieneRating: typeof data.hygieneRating === 'number' ? data.hygieneRating : 0,
+            serviceRating: typeof data.serviceRating === 'number' ? data.serviceRating : 0,
+            address: data.address || '',
+            lat: isNaN(lat) ? 0 : lat,
+            lng: isNaN(lng) ? 0 : lng,
+            description: data.description || '',
+            menuCardImage: data.menuImage || data.menuCardImage || '',
+            menuItems: Array.isArray(data.menuItems) ? data.menuItems : [],
+            reviews: Array.isArray(data.reviews) ? data.reviews : [],
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt
           };
         }
       } catch (err) {
@@ -194,6 +213,42 @@ export const shopService = {
 
     const local = getLocalShops();
     return local.find((s) => s.id === shopId) || null;
+  },
+
+  /**
+   * Upload actual shopkeeper photos (stall photo or menu card) to Firebase Storage
+   * bucket path: shops/{ownerId}/{type}_{timestamp}.{ext}
+   */
+  async uploadShopMedia(
+    file: File | Blob,
+    ownerId: string,
+    type: 'stall' | 'menu'
+  ): Promise<string> {
+    if (isFirebaseConfigured && storage && ownerId) {
+      try {
+        const timestamp = Date.now();
+        const rawName = (file as File).name || `${type}_photo.jpg`;
+        const ext = rawName.split('.').pop() || 'jpg';
+        const cleanName = `${type}_${timestamp}.${ext}`;
+        const path = `shops/${ownerId}/${cleanName}`;
+        const storageRef = ref(storage, path);
+        const contentType = file.type || 'image/jpeg';
+
+        await uploadBytes(storageRef, file, { contentType });
+        const downloadUrl = await getDownloadURL(storageRef);
+        console.info(`[FoodCheck Storage] Uploaded ${type} image successfully:`, downloadUrl);
+        return downloadUrl;
+      } catch (err) {
+        console.warn(`[FoodCheck Storage] Firebase Storage upload error for ${type}:`, err);
+      }
+    }
+
+    // Fallback: Read as data URL from user's file so it's their real image, never fake placeholder
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve((e.target?.result as string) || '');
+      reader.readAsDataURL(file);
+    });
   },
 
   /**
@@ -220,7 +275,7 @@ export const shopService = {
     const shopId = 'shop-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
     const now = new Date().toISOString();
 
-    const shopDoc: ShopDocument = {
+    const shopDoc: any = {
       shopId,
       ownerId: params.ownerId,
       shopName: params.shopName.trim(),
@@ -228,20 +283,23 @@ export const shopService = {
       description: params.description.trim(),
       latitude: params.latitude,
       longitude: params.longitude,
+      location: {
+        latitude: params.latitude,
+        longitude: params.longitude
+      },
       openingTime: params.openingTime || '08:00 AM',
       closingTime: params.closingTime || '10:00 PM',
-      shopImage: params.shopImage,
-      menuImage: params.menuImage,
+      shopImage: params.shopImage || '',
+      menuImage: params.menuImage || '',
       isPublished: true,
       isOpen: true,
-      rating: 4.8,
-      foodQualityRating: 4.8,
-      hygieneRating: 4.7,
-      serviceRating: 4.6,
-      address: params.address || 'Street Location',
-      menuItems: params.menuItems || [
-        { id: 'm-init-1', name: 'Signature Dish', price: '₹50', isVeg: true, category: 'Specials' }
-      ],
+      rating: 0,
+      reviewsCount: 0,
+      foodQualityRating: 0,
+      hygieneRating: 0,
+      serviceRating: 0,
+      address: params.address || '',
+      menuItems: params.menuItems || [],
       createdAt: now,
       updatedAt: now
     };
@@ -252,17 +310,18 @@ export const shopService = {
       name: shopDoc.shopName,
       category: shopDoc.category,
       imageUrl: shopDoc.shopImage,
-      distance: '0.3 km',
-      distanceMeters: 300,
-      rating: shopDoc.rating,
+      distance: '',
+      distanceMeters: 0,
+      rating: 0,
+      reviewsCount: 0,
       isOpen: true,
       isPublished: true,
-      isPopular: true,
+      isPopular: false,
       openingTime: shopDoc.openingTime,
       closingTime: shopDoc.closingTime,
-      foodQualityRating: shopDoc.foodQualityRating,
-      hygieneRating: shopDoc.hygieneRating,
-      serviceRating: shopDoc.serviceRating,
+      foodQualityRating: 0,
+      hygieneRating: 0,
+      serviceRating: 0,
       address: shopDoc.address,
       lat: shopDoc.latitude,
       lng: shopDoc.longitude,
@@ -364,8 +423,8 @@ export const shopService = {
       shopName: shop.name,
       category: shop.category,
       description: shop.description || '',
-      latitude: shop.lat || 18.5204,
-      longitude: shop.lng || 73.8567,
+      latitude: typeof shop.lat === 'number' ? shop.lat : 0,
+      longitude: typeof shop.lng === 'number' ? shop.lng : 0,
       openingTime: shop.openingTime || '08:00 AM',
       closingTime: shop.closingTime || '10:00 PM',
       shopImage: shop.imageUrl,

@@ -45,9 +45,9 @@ export const MobileFrame: React.FC<MobileFrameProps> = ({ children, activeScreen
       <div
         className={`w-full transition-all duration-300 bg-[#FAF7F2] text-slate-900 overflow-hidden relative shadow-2xl ${
           isFrameMode
-            ? 'max-w-[420px] h-[880px] rounded-[44px] ring-12 ring-slate-800/90 border-4 border-slate-700/60'
-            : 'max-w-md min-h-screen sm:min-h-[850px] sm:rounded-3xl'
-        } flex flex-col`}
+            ? 'max-w-[420px] h-[880px] max-h-[92vh] rounded-[44px] ring-12 ring-slate-800/90 border-4 border-slate-700/60'
+            : 'max-w-md h-screen sm:h-[880px] sm:max-h-[92vh] sm:rounded-3xl'
+        } flex flex-col min-h-0`}
       >
         {/* Android Punch Hole Camera & Status Bar */}
         <div className="w-full bg-inherit text-slate-700 px-6 pt-3 pb-1 flex items-center justify-between text-[11px] font-semibold tracking-tight z-50 select-none">

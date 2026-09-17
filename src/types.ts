@@ -13,7 +13,9 @@ export type AppScreen =
   | 'language'
   | 'shopkeeper_dashboard'
   | 'shopkeeper_setup'
-  | 'shopkeeper_profile';
+  | 'shopkeeper_profile'
+  | 'firebase_test';
+
 
 export type UserRole = 'user' | 'shopkeeper';
 
@@ -30,11 +32,18 @@ export interface AnalysisSummaryItem {
 export interface FoodScanResult {
   id: string;
   userId?: string;
-  foodName: string;
-  foodType: ScanType;
+  foodName: string; // Detected food name (e.g. "Cheese")
+  foodType: ScanType; // 'packaged' | 'street'
+  foodTypeLabel?: string; // Visible category/type (e.g. "Dairy Product (Cheddar / processed)")
   imageUrl: string;
   scanDate: string;
-  safetyScore: number; // 0 - 10
+  safetyScore: number; // 0 - 10 clamped
+  confidence: number; // 0.0 - 1.0 (e.g. 0.86 = 86%)
+  visibleConcerns: string[];
+  positiveIndicators: string[];
+  explanation: string; // Why this score?
+  expiryText?: string | null;
+  allergens?: string[];
   riskLabel: 'Lower apparent risk' | 'Caution' | 'Higher apparent risk';
   riskColor: 'green' | 'yellow' | 'red';
   summaryItems: AnalysisSummaryItem[];
@@ -67,6 +76,7 @@ export interface ShopReview {
   userLiked?: boolean;
   userDisliked?: boolean;
   createdAt?: string;
+  photoUrl?: string;
 }
 
 export interface MenuItem {
@@ -102,6 +112,7 @@ export interface FoodShop {
   menuCardImage?: string;
   menuItems: MenuItem[];
   reviews: ShopReview[];
+  reviewsCount?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -121,6 +132,7 @@ export interface ShopDocument {
   isPublished: boolean;
   isOpen: boolean;
   rating: number;
+  reviewsCount?: number;
   foodQualityRating: number;
   hygieneRating: number;
   serviceRating: number;

@@ -20,21 +20,15 @@ export const Logo: React.FC<LogoProps> = ({
     lg: { box: 'w-16 h-16 rounded-3xl', icon: 28, shield: 24, title: 'text-2xl font-extrabold', tagline: 'text-sm' },
     xl: { box: 'w-24 h-24 rounded-[32px]', icon: 42, shield: 36, title: 'text-3xl font-black', tagline: 'text-base' },
   };
-
   const current = sizeMap[size];
-
   return (
     <div className="flex items-center gap-3">
-      {/* Food + Shield Checkmark icon symbol */}
       <div className={`relative ${current.box} bg-gradient-to-br from-amber-400 via-orange-500 to-amber-600 flex items-center justify-center shadow-md shadow-orange-500/20 text-white flex-shrink-0`}>
-        {/* Shield background layer */}
         <ShieldCheck className="text-white/95" size={current.icon} strokeWidth={2.4} />
-        {/* Subtle nested fork/leaf symbol */}
         <div className="absolute -bottom-1 -right-1 bg-amber-300 text-slate-900 rounded-full p-1 border-2 border-white shadow-xs">
           <Utensils size={current.shield / 2.2} strokeWidth={2.8} />
         </div>
       </div>
-
       {showText && (
         <div className="flex flex-col">
           <div className="flex items-baseline gap-1">
@@ -49,6 +43,37 @@ export const Logo: React.FC<LogoProps> = ({
           )}
         </div>
       )}
+    </div>
+  );
+};
+
+import foodPulseLogo from '../../assets/logo.png';
+
+// ─── Logo Component / Placeholder ─────────────────────────────────────────────
+interface LogoPlaceholderProps {
+  size?: 'sm' | 'md' | 'lg' | 'xl';
+  className?: string;
+}
+export const LogoPlaceholder: React.FC<LogoPlaceholderProps> = ({
+  size = 'md',
+  className = '',
+}) => {
+  const sMap: Record<string, string> = {
+    sm: 'w-9 h-9 rounded-xl',
+    md: 'w-12 h-12 rounded-2xl',
+    lg: 'w-16 h-16 rounded-3xl',
+    xl: 'w-24 h-24 rounded-[28px]',
+  };
+  return (
+    <div
+      className={`${sMap[size]} overflow-hidden flex items-center justify-center bg-white shadow-xs border border-slate-200/70 flex-shrink-0 ${className}`}
+      title="FoodPulse Brand Logo"
+    >
+      <img
+        src={foodPulseLogo}
+        alt="FoodPulse Logo"
+        className="w-full h-full object-contain"
+      />
     </div>
   );
 };

@@ -1,7 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Star, MapPin, Clock, Utensils, ThumbsUp, ThumbsDown, MessageSquareHeart, Share2, ShieldCheck, Check, Trash2, Loader2, Sparkles } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  ArrowLeft,
+  Star,
+  MapPin,
+  Clock,
+  Utensils,
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquareHeart,
+  Share2,
+  ShieldCheck,
+  Trash2,
+  Loader2,
+  Store,
+  Camera,
+  Plus,
+  Image as ImageIcon,
+  X,
+  Maximize2
+} from 'lucide-react';
 import { FoodShop, ShopReview } from '../../types';
 import { reviewService } from '../../services/reviewService';
+import { shopService } from '../../services/shopService';
 
 interface ShopDetailsScreenProps {
   shop: FoodShop;
@@ -11,6 +31,15 @@ interface ShopDetailsScreenProps {
   onToggleLikeReview?: (shopId: string, reviewId: string) => void;
 }
 
+interface StallPhotoItem {
+  id: string;
+  url: string;
+  caption?: string;
+  uploadedBy?: string;
+  uploadedRole?: 'Shopkeeper' | 'Customer' | 'FoodCheck';
+  date?: string;
+}
+
 export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   shop,
   currentUserId,
@@ -18,17 +47,28 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   onWriteReview,
   onToggleLikeReview
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'menu' | 'reviews'>('overview');
-  const [liveReviews, setLiveReviews] = useState<ShopReview[]>(shop.reviews || []);
-  const [loadingReviews, setLoadingReviews] = useState<boolean>(false);
+  // STRICTLY 2 TABS ONLY: 'ratings' and 'photos'
+  const [activeTab, setActiveTab] = useState<'ratings' | 'photos'>('ratings');
+  const [liveReviews, setLiveReviews] = useState<ShopReview[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState<boolean>(true);
   const [aggregatedRatings, setAggregatedRatings] = useState({
-    rating: shop.rating || 4.5,
-    foodQualityRating: shop.foodQualityRating || 4.6,
-    hygieneRating: shop.hygieneRating || 4.5,
-    reviewsCount: shop.reviews?.length || 0
+    rating: typeof shop.rating === 'number' ? shop.rating : 0,
+    foodQualityRating: typeof shop.foodQualityRating === 'number' ? shop.foodQualityRating : 0,
+    hygieneRating: typeof shop.hygieneRating === 'number' ? shop.hygieneRating : 0,
+    reviewsCount: shop.reviewsCount ?? shop.reviews?.length ?? 0
   });
 
-  // Load reviews from Firestore
+  // Photo Upload & Lightbox state
+  const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
+  const [photoCaption, setPhotoCaption] = useState<string>('');
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState<boolean>(false);
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+  const [activeLightboxPhoto, setActiveLightboxPhoto] = useState<StallPhotoItem | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load real reviews from Firestore
   const loadReviews = async () => {
     setLoadingReviews(true);
     try {
@@ -39,27 +79,43 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             id: f.reviewId,
             shopId: f.targetId,
             userId: f.userId,
-            userName: f.userName,
-            userAvatar: f.userProfileImage || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+            userName: f.userName || 'Anonymous Foodie',
+            userAvatar: f.userProfileImage || '',
             rating: f.rating,
             subRatings: f.subRatings,
             reviewText: f.reviewText,
-            likeCount: f.likesCount,
+            photoUrl: f.photoUrl,
+            likeCount: f.likesCount || 0,
             dislikeCount: f.dislikesCount || 0,
-            date: new Date(f.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+            date: f.createdAt
+              ? new Date(f.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+              : 'Recently',
             userLiked: f.userReaction === 'like',
-            userDisliked: f.userReaction === 'dislike'
+            userDisliked: f.userReaction === 'dislike',
+            createdAt: f.createdAt
           }))
         );
 
-        // Compute live aggregate ratings
+        // Compute live aggregate ratings from real reviews
         const aggr = await reviewService.calculateShopRatings(shop.id);
         setAggregatedRatings(aggr);
       } else {
-        setLiveReviews(shop.reviews || []);
+        setLiveReviews([]);
+        setAggregatedRatings({
+          rating: 0,
+          foodQualityRating: 0,
+          hygieneRating: 0,
+          reviewsCount: 0
+        });
       }
     } catch {
-      setLiveReviews(shop.reviews || []);
+      setLiveReviews([]);
+      setAggregatedRatings({
+        rating: 0,
+        foodQualityRating: 0,
+        hygieneRating: 0,
+        reviewsCount: 0
+      });
     } finally {
       setLoadingReviews(false);
     }
@@ -67,7 +123,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
 
   useEffect(() => {
     loadReviews();
-  }, [shop.id, currentUserId]);
+  }, [shop.id, currentUserId, shop.reviewsCount, shop.reviews?.length]);
 
   const handleLike = async (reviewId: string) => {
     if (onToggleLikeReview) {
@@ -120,25 +176,120 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
 
   const handleDelete = async (reviewId: string) => {
     if (!currentUserId) return;
-    if (!window.confirm('Delete your review?')) return;
-
     try {
       await reviewService.deleteReview(reviewId, currentUserId);
       setLiveReviews((prev) => prev.filter((r) => r.id !== reviewId));
+      const aggr = await reviewService.calculateShopRatings(shop.id);
+      setAggregatedRatings(aggr);
+    } catch (err) {
+      console.warn('Delete review failed:', err);
+    }
+  };
+
+  // Build list of real photos uploaded for this stall
+  const stallPhotos: StallPhotoItem[] = [];
+
+  // 1. Primary stall photo from shop registration
+  if (shop.imageUrl && shop.imageUrl.trim() !== '') {
+    stallPhotos.push({
+      id: 'stall-hero',
+      url: shop.imageUrl,
+      caption: `${shop.name} Stall Front`,
+      uploadedBy: shop.ownerId ? 'Shopkeeper' : 'FoodCheck',
+      uploadedRole: 'Shopkeeper'
+    });
+  }
+
+  // 2. Menu card photo from shop registration if uploaded
+  if (shop.menuCardImage && shop.menuCardImage.trim() !== '') {
+    stallPhotos.push({
+      id: 'stall-menu',
+      url: shop.menuCardImage,
+      caption: 'Official Menu Card',
+      uploadedBy: 'Shopkeeper',
+      uploadedRole: 'Shopkeeper'
+    });
+  }
+
+  // 3. Real photos uploaded by users in their reviews/experiences
+  liveReviews.forEach((rev) => {
+    if (rev.photoUrl && rev.photoUrl.trim() !== '') {
+      stallPhotos.push({
+        id: `rev-photo-${rev.id}`,
+        url: rev.photoUrl,
+        caption: rev.reviewText || 'Food photo',
+        uploadedBy: rev.userName,
+        uploadedRole: rev.userId === shop.ownerId ? 'Shopkeeper' : 'Customer',
+        date: rev.date
+      });
+    }
+  });
+
+  // Handle file selection from camera or gallery
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setSelectedPhotoFile(file);
+      const preview = URL.createObjectURL(file);
+      setPhotoPreviewUrl(preview);
+      setShowUploadModal(true);
+    }
+  };
+
+  // Upload Stall Photo (by shopkeeper or normal user)
+  const handleUploadPhotoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPhotoFile) return;
+
+    setIsUploadingPhoto(true);
+    try {
+      const uploaderId = currentUserId || 'guest-' + Date.now();
+      const uploadedUrl = await shopService.uploadShopMedia(selectedPhotoFile, uploaderId, 'stall');
+
+      // Create a real review/experience entry in Firestore with this photo
+      await reviewService.createReview({
+        userId: uploaderId,
+        userName: currentUserId === shop.ownerId ? `${shop.name} (Shopkeeper)` : 'Community Foodie',
+        userProfileImage: '',
+        targetId: shop.id,
+        targetType: 'shop',
+        rating: 5,
+        reviewText: photoCaption.trim() || 'Stall photo uploaded by community foodie.',
+        photoUrl: uploadedUrl
+      });
+
+      // Reload real reviews to display updated photos
+      await loadReviews();
+
+      // Clean up modal state
+      setSelectedPhotoFile(null);
+      setPhotoPreviewUrl(null);
+      setPhotoCaption('');
+      setShowUploadModal(false);
     } catch (err: any) {
-      alert(err.message || 'Could not delete review');
+      console.warn('Failed to upload stall photo:', err);
+      alert(err.message || 'Failed to upload stall photo.');
+    } finally {
+      setIsUploadingPhoto(false);
     }
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-8">
+    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Hero Image with Floating Controls */}
       <div className="relative h-56 w-full bg-slate-900 flex-shrink-0">
-        <img
-          src={shop.imageUrl}
-          alt={shop.name}
-          className="w-full h-full object-cover opacity-90"
-        />
+        {shop.imageUrl ? (
+          <img
+            src={shop.imageUrl}
+            alt={shop.name}
+            className="w-full h-full object-cover opacity-90"
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-amber-900 via-orange-950 to-slate-900 text-amber-200/80">
+            <Store size={44} />
+            <span className="text-xs font-semibold mt-2">No stall photo uploaded yet</span>
+          </div>
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/60 pointer-events-none"></div>
 
         {/* Top bar controls */}
@@ -177,7 +328,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             </span>
             <span className="text-[11px] font-semibold text-amber-300 flex items-center gap-1">
               <ShieldCheck size={13} />
-              <span>FoodCheck Verified</span>
+              <span>FoodCheck Verified Stall</span>
             </span>
           </div>
 
@@ -190,282 +341,481 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="bg-white border-b border-slate-200/80 px-4 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
+      {/* STRICTLY 2 TABS: TAB 1: Ratings & Experiences, TAB 2: Photos */}
+      <div className="bg-white border-b border-slate-200/80 px-4 flex items-center justify-around sticky top-0 z-30 shadow-2xs">
         <button
-          onClick={() => setActiveTab('overview')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-            activeTab === 'overview'
+          onClick={() => setActiveTab('ratings')}
+          className={`flex-1 py-3.5 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            activeTab === 'ratings'
               ? 'border-orange-500 text-orange-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          Overview & Ratings
+          Ratings & Experiences ({aggregatedRatings.reviewsCount})
         </button>
         <button
-          onClick={() => setActiveTab('menu')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-            activeTab === 'menu'
+          onClick={() => setActiveTab('photos')}
+          className={`flex-1 py-3.5 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
+            activeTab === 'photos'
               ? 'border-orange-500 text-orange-600'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           }`}
         >
-          Menu Card ({shop.menuItems.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('reviews')}
-          className={`py-3 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-            activeTab === 'reviews'
-              ? 'border-orange-500 text-orange-600'
-              : 'border-transparent text-slate-500 hover:text-slate-800'
-          }`}
-        >
-          Reviews ({liveReviews.length})
+          Photos ({stallPhotos.length})
         </button>
       </div>
 
-      {/* Tab Content */}
-      <div className="p-4 space-y-4">
-        {/* Rating & Quick Info Header */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div className="flex items-center gap-2">
-              <div className="text-2xl font-black text-slate-900">
-                {aggregatedRatings.rating}
-              </div>
-              <div>
-                <div className="flex items-center text-amber-500">
-                  {[...Array(5)].map((_, i) => (
-                    <Star
-                      key={i}
-                      size={14}
-                      className={i < Math.floor(aggregatedRatings.rating) ? 'fill-amber-500' : 'text-slate-300'}
-                    />
-                  ))}
+      {/* TAB 1: RATINGS & EXPERIENCES */}
+      {activeTab === 'ratings' && (
+        <div className="p-4 space-y-4 animate-fade-in">
+          {/* Real Rating & Quick Info Header */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="text-2xl font-black text-slate-900">
+                  {aggregatedRatings.reviewsCount > 0 ? aggregatedRatings.rating : '—'}
                 </div>
-                <span className="text-[10px] text-slate-400 font-medium">
-                  {aggregatedRatings.reviewsCount > 0
-                    ? `Based on ${aggregatedRatings.reviewsCount} community ratings`
-                    : 'Community FoodCheck rating'}
-                </span>
+                <div>
+                  <div className="flex items-center text-amber-500">
+                    {[...Array(5)].map((_, i) => (
+                      <Star
+                        key={i}
+                        size={14}
+                        className={
+                          aggregatedRatings.reviewsCount > 0 && i < Math.floor(aggregatedRatings.rating)
+                            ? 'fill-amber-500 text-amber-500'
+                            : 'text-slate-300'
+                        }
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    {aggregatedRatings.reviewsCount > 0
+                      ? `Based on ${aggregatedRatings.reviewsCount} verified reviews`
+                      : 'No reviews yet'}
+                  </span>
+                </div>
+              </div>
+
+              {shop.distance && (
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">
+                  <MapPin size={13} />
+                  <span>{shop.distance}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Quick Info Grid */}
+            <div className="grid grid-cols-2 gap-2.5 pt-3 text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <Clock size={14} className="text-slate-400" />
+                <span>{shop.openingTime} - {shop.closingTime}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Utensils size={14} className="text-slate-400" />
+                <span className="truncate">{shop.category}</span>
               </div>
             </div>
+          </div>
 
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-50 text-amber-900 text-xs font-bold">
-              <MapPin size={13} />
-              <span>{shop.distance}</span>
+          {/* Breakdown: Overall Food Quality & Hygiene Ratings from Firebase */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Food Quality Rating
+              </span>
+              <div className="flex items-center gap-1.5 mt-2">
+                <Star
+                  size={18}
+                  className={aggregatedRatings.reviewsCount > 0 ? 'text-amber-500 fill-amber-500' : 'text-slate-300'}
+                />
+                <span className="text-xl font-extrabold text-slate-900">
+                  {aggregatedRatings.reviewsCount > 0 ? aggregatedRatings.foodQualityRating : '—'}
+                </span>
+                {aggregatedRatings.reviewsCount > 0 && <span className="text-xs text-slate-400">/ 5</span>}
+              </div>
+              <span className="text-[10px] text-orange-600 font-semibold mt-1">
+                {aggregatedRatings.reviewsCount > 0 ? 'Taste & Quality' : 'No ratings yet'}
+              </span>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Hygiene Rating
+              </span>
+              <div className="flex items-center gap-1.5 mt-2">
+                <ShieldCheck
+                  size={18}
+                  className={aggregatedRatings.reviewsCount > 0 ? 'text-orange-500' : 'text-slate-300'}
+                />
+                <span className="text-xl font-extrabold text-slate-900">
+                  {aggregatedRatings.reviewsCount > 0 ? aggregatedRatings.hygieneRating : '—'}
+                </span>
+                {aggregatedRatings.reviewsCount > 0 && <span className="text-xs text-slate-400">/ 5</span>}
+              </div>
+              <span className="text-[10px] text-orange-600 font-semibold mt-1">
+                {aggregatedRatings.reviewsCount > 0 ? 'Cleanliness & Safety' : 'No ratings yet'}
+              </span>
             </div>
           </div>
 
-          {/* Quick Info Grid */}
-          <div className="grid grid-cols-2 gap-2.5 pt-3 text-xs text-slate-600">
-            <div className="flex items-center gap-2">
-              <Clock size={14} className="text-slate-400" />
-              <span>{shop.openingTime} - {shop.closingTime}</span>
+          {/* Customer Reviews & Experiences Section */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                  Community Reviews & Experiences
+                </h3>
+                <p className="text-[10px] text-slate-400 font-medium">
+                  Real feedback on freshness, hygiene & taste
+                </p>
+              </div>
+              <button
+                onClick={() => onWriteReview(shop.id)}
+                className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold flex items-center gap-1 active:scale-95 transition-transform cursor-pointer"
+              >
+                <MessageSquareHeart size={13} />
+                <span>Write Review</span>
+              </button>
             </div>
-            <div className="flex items-center gap-2">
-              <Utensils size={14} className="text-slate-400" />
-              <span className="truncate">{shop.category.split('&')[0]}</span>
+
+            <div className="space-y-3">
+              {loadingReviews ? (
+                <div className="py-8 flex flex-col items-center justify-center text-slate-400 gap-2">
+                  <Loader2 size={20} className="animate-spin text-orange-500" />
+                  <span className="text-xs">Loading reviews…</span>
+                </div>
+              ) : liveReviews.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 text-xs italic">
+                  No reviews yet. Be the first to share your rating & experience!
+                </div>
+              ) : (
+                liveReviews.map((rev) => {
+                  const isCurrentUserReview = Boolean(currentUserId && rev.userId === currentUserId);
+                  return (
+                    <div
+                      key={rev.id}
+                      className={`p-3.5 rounded-xl border transition-all ${
+                        isCurrentUserReview
+                          ? 'bg-amber-50/50 border-amber-300/80 ring-1 ring-amber-200'
+                          : 'bg-slate-50 border-slate-200/60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={rev.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'}
+                            alt={rev.userName}
+                            className="w-8 h-8 rounded-full object-cover bg-slate-200 ring-1 ring-slate-200"
+                          />
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <h4 className="text-xs font-bold text-slate-900">
+                                {rev.userName}
+                              </h4>
+                              {isCurrentUserReview && (
+                                <span className="bg-orange-500 text-white text-[9px] font-extrabold px-1.5 py-0.2 rounded-md shadow-2xs">
+                                  Your Review
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-slate-400">{rev.date}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {/* Rating stars */}
+                          <div className="flex items-center text-amber-500">
+                            {[...Array(rev.rating)].map((_, i) => (
+                              <Star key={i} size={12} className="fill-amber-500" />
+                            ))}
+                          </div>
+
+                          {/* Delete button for review owner */}
+                          {isCurrentUserReview && (
+                            <button
+                              onClick={() => handleDelete(rev.id)}
+                              title="Delete your review"
+                              className="text-slate-400 hover:text-red-500 p-1 rounded-md transition-colors cursor-pointer"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Review Text / Experience */}
+                      <p className="text-xs text-slate-700 mt-2 leading-relaxed">
+                        “{rev.reviewText}”
+                      </p>
+
+                      {/* Attached Review Photo if any */}
+                      {rev.photoUrl && (
+                        <div className="mt-2.5">
+                          <img
+                            src={rev.photoUrl}
+                            alt="Review attachment"
+                            onClick={() =>
+                              setActiveLightboxPhoto({
+                                id: rev.id,
+                                url: rev.photoUrl!,
+                                caption: rev.reviewText,
+                                uploadedBy: rev.userName,
+                                uploadedRole: isCurrentUserReview ? 'Customer' : 'Customer'
+                              })
+                            }
+                            className="w-28 h-20 rounded-xl object-cover ring-1 ring-slate-200 hover:opacity-90 transition-opacity cursor-pointer"
+                          />
+                        </div>
+                      )}
+
+                      {/* Likes and reaction row */}
+                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60">
+                        <div className="flex items-center gap-3">
+                          {/* Like button */}
+                          <button
+                            onClick={() => handleLike(rev.id)}
+                            className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
+                              rev.userLiked ? 'text-orange-600' : 'text-slate-500 hover:text-slate-800'
+                            }`}
+                            title="Helpful (Like)"
+                          >
+                            <ThumbsUp
+                              size={13}
+                              className={rev.userLiked ? 'fill-orange-500 text-orange-500' : ''}
+                            />
+                            <span>{rev.likeCount}</span>
+                          </button>
+
+                          {/* Dislike button */}
+                          <button
+                            onClick={() => handleDislike(rev.id)}
+                            className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
+                              rev.userDisliked ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
+                            }`}
+                            title="Not helpful (Dislike)"
+                          >
+                            <ThumbsDown
+                              size={13}
+                              className={rev.userDisliked ? 'fill-slate-700 text-slate-700' : ''}
+                            />
+                            {(rev.dislikeCount || 0) > 0 && <span>{rev.dislikeCount}</span>}
+                          </button>
+                        </div>
+
+                        <span className="text-[10px] text-amber-950 font-semibold bg-amber-100 px-2 py-0.5 rounded-md">
+                          Verified Experience
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         </div>
+      )}
 
-        {/* Breakdown Sections: Overall Food Quality & Hygiene */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Overall Food Rating
-            </span>
-            <div className="flex items-center gap-1.5 mt-2">
-              <Star size={18} className="text-amber-500 fill-amber-500" />
-              <span className="text-xl font-extrabold text-slate-900">
-                {aggregatedRatings.foodQualityRating}
-              </span>
-              <span className="text-xs text-slate-400">/ 5</span>
+      {/* TAB 2: PHOTOS */}
+      {activeTab === 'photos' && (
+        <div className="p-4 space-y-4 animate-fade-in">
+          {/* Header & Add Photo CTA */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex items-center justify-between">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Stall Photos ({stallPhotos.length})
+              </h3>
+              <p className="text-[10px] text-slate-400 font-medium">
+                Uploaded by shopkeeper & FoodCheck community
+              </p>
             </div>
-            <span className="text-[10px] text-orange-600 font-semibold mt-1">
-              Taste, Freshness & Quality
-            </span>
-          </div>
 
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs flex flex-col justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Hygiene Rating
-            </span>
-            <div className="flex items-center gap-1.5 mt-2">
-              <ShieldCheck size={18} className="text-orange-500" />
-              <span className="text-xl font-extrabold text-slate-900">
-                {aggregatedRatings.hygieneRating}
-              </span>
-              <span className="text-xs text-slate-400">/ 5</span>
+            {/* Upload Stall Photo Button */}
+            <div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileChange}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-transform cursor-pointer shadow-xs"
+              >
+                <Camera size={14} />
+                <span>+ Add Photo</span>
+              </button>
             </div>
-            <span className="text-[10px] text-orange-600 font-semibold mt-1">
-              Cleanliness & Safe Service
-            </span>
-          </div>
-        </div>
-
-        {/* Menu Section: "Menu Card" */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-              Menu Card & Pricing
-            </h3>
-            <span className="text-[11px] font-semibold text-orange-600">
-              Daily Fresh
-            </span>
           </div>
 
-          {/* Menu Items List */}
-          <div className="divide-y divide-slate-100">
-            {shop.menuItems.map((item) => (
-              <div key={item.id} className="py-2.5 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-3.5 h-3.5 rounded-sm border border-green-600 flex items-center justify-center p-0.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-600"></span>
-                  </span>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">
-                      {item.name}
-                    </h4>
-                    <span className="text-[10px] text-slate-400">{item.category}</span>
+          {/* Photos Grid */}
+          {stallPhotos.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-8 shadow-xs text-center">
+              <ImageIcon size={36} className="mx-auto mb-2 text-slate-300" />
+              <h4 className="text-xs font-bold text-slate-700 mb-1">No photos uploaded yet</h4>
+              <p className="text-[11px] text-slate-400 mb-4">
+                Be the first to upload a photo of this stall or its food!
+              </p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="py-2 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 active:scale-95 transition-transform cursor-pointer"
+              >
+                <Camera size={14} />
+                <span>Upload First Photo</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {stallPhotos.map((photo) => (
+                <div
+                  key={photo.id}
+                  onClick={() => setActiveLightboxPhoto(photo)}
+                  className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs group cursor-pointer active:scale-98 transition-transform"
+                >
+                  <div className="relative h-36 w-full bg-slate-100 overflow-hidden">
+                    <img
+                      src={photo.url}
+                      alt={photo.caption || 'Stall photo'}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-xs text-white p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Maximize2 size={12} />
+                    </div>
+                    {photo.uploadedRole && (
+                      <span className="absolute bottom-2 left-2 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-black/60 backdrop-blur-xs text-white">
+                        {photo.uploadedRole}
+                      </span>
+                    )}
+                  </div>
+                  <div className="p-2.5">
+                    <p className="text-[11px] font-bold text-slate-800 truncate">
+                      {photo.caption || 'Stall Photo'}
+                    </p>
+                    <div className="flex items-center justify-between text-[9px] text-slate-400 mt-0.5">
+                      <span className="truncate">by {photo.uploadedBy || 'FoodCheck'}</span>
+                      {photo.date && <span>{photo.date}</span>}
+                    </div>
                   </div>
                 </div>
-                <span className="text-xs font-extrabold text-slate-900">
-                  {item.price}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {shop.menuCardImage && (
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <span className="text-[11px] font-semibold text-slate-500 mb-1.5 block">
-                Official Stall Photo:
-              </span>
-              <img
-                src={shop.menuCardImage}
-                alt="Menu Card"
-                className="w-full h-32 rounded-xl object-cover ring-1 ring-slate-200"
-              />
+              ))}
             </div>
           )}
         </div>
+      )}
 
-        {/* Customer Reviews Section */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
-                Community Reviews
-              </h3>
-              <p className="text-[10px] text-slate-400 font-medium">
-                Verified ratings on food freshness & hygiene
-              </p>
-            </div>
-            <button
-              onClick={() => onWriteReview(shop.id)}
-              className="py-1.5 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-xs font-bold flex items-center gap-1 active:scale-95 transition-transform cursor-pointer"
-            >
-              <MessageSquareHeart size={13} />
-              <span>Write Review</span>
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {loadingReviews ? (
-              <div className="py-8 flex flex-col items-center justify-center text-slate-400 gap-2">
-                <Loader2 size={20} className="animate-spin text-orange-500" />
-                <span className="text-xs">Loading reviews…</span>
+      {/* Upload Photo Confirmation Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-5 max-w-sm w-full shadow-2xl border border-slate-200 animate-fade-in space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Camera size={16} className="text-orange-500" />
+                <h3 className="text-xs font-bold text-slate-900">Upload Stall Photo</h3>
               </div>
-            ) : liveReviews.length === 0 ? (
-              <p className="text-xs text-slate-400 italic py-4 text-center">
-                No reviews yet. Be the first to review this shop.
-              </p>
-            ) : (
-              liveReviews.map((rev) => (
-                <div
-                  key={rev.id}
-                  className="p-3 rounded-xl bg-slate-50 border border-slate-200/60"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <img
-                        src={rev.userAvatar}
-                        alt={rev.userName}
-                        className="w-7 h-7 rounded-full object-cover bg-slate-200 ring-1 ring-slate-200"
-                      />
-                      <div>
-                        <h4 className="text-xs font-bold text-slate-900">
-                          {rev.userName}
-                        </h4>
-                        <span className="text-[10px] text-slate-400">{rev.date}</span>
-                      </div>
-                    </div>
+              <button
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setSelectedPhotoFile(null);
+                  setPhotoPreviewUrl(null);
+                }}
+                disabled={isUploadingPhoto}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
 
-                    <div className="flex items-center gap-2">
-                      {/* Rating stars */}
-                      <div className="flex items-center text-amber-500">
-                        {[...Array(rev.rating)].map((_, i) => (
-                          <Star key={i} size={12} className="fill-amber-500" />
-                        ))}
-                      </div>
-
-                      {/* Delete button for review owner (Module 1L) */}
-                      {currentUserId && rev.userId === currentUserId && (
-                        <button
-                          onClick={() => handleDelete(rev.id)}
-                          title="Delete your review"
-                          className="text-slate-400 hover:text-red-500 p-1 rounded-md transition-colors cursor-pointer"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-slate-700 mt-2 leading-relaxed">
-                    “{rev.reviewText}”
-                  </p>
-
-                  {/* Likes and interaction buttons */}
-                  <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60">
-                    <div className="flex items-center gap-3">
-                      {/* Like button */}
-                      <button
-                        onClick={() => handleLike(rev.id)}
-                        className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
-                          rev.userLiked ? 'text-orange-600' : 'text-slate-500 hover:text-slate-800'
-                        }`}
-                        title="Helpful (Like)"
-                      >
-                        <ThumbsUp size={13} className={rev.userLiked ? 'fill-orange-500 text-orange-500' : ''} />
-                        <span>{rev.likeCount}</span>
-                      </button>
-
-                      {/* Dislike button */}
-                      <button
-                        onClick={() => handleDislike(rev.id)}
-                        className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
-                          rev.userDisliked ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
-                        }`}
-                        title="Not helpful (Dislike)"
-                      >
-                        <ThumbsDown size={13} className={rev.userDisliked ? 'fill-slate-700 text-slate-700' : ''} />
-                        {(rev.dislikeCount || 0) > 0 && <span>{rev.dislikeCount}</span>}
-                      </button>
-                    </div>
-
-                    <span className="text-[10px] text-amber-950 font-semibold bg-amber-100 px-2 py-0.5 rounded-md">
-                      Helpful Review
-                    </span>
-                  </div>
-                </div>
-              ))
+            {photoPreviewUrl && (
+              <div className="h-44 w-full rounded-2xl overflow-hidden border border-slate-200 bg-slate-50">
+                <img
+                  src={photoPreviewUrl}
+                  alt="Preview"
+                  className="w-full h-full object-cover"
+                />
+              </div>
             )}
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Photo Caption (Optional)
+              </label>
+              <input
+                type="text"
+                value={photoCaption}
+                onChange={(e) => setPhotoCaption(e.target.value)}
+                placeholder="e.g. Delicious fresh butter dosa, stall cleanliness"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-orange-500"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setSelectedPhotoFile(null);
+                  setPhotoPreviewUrl(null);
+                }}
+                disabled={isUploadingPhoto}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleUploadPhotoSubmit}
+                disabled={isUploadingPhoto}
+                className="flex-2 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-transform cursor-pointer disabled:opacity-50 shadow-xs"
+              >
+                {isUploadingPhoto ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Uploading…</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus size={14} />
+                    <span>Add Photo</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
+
+      {/* Lightbox Modal */}
+      {activeLightboxPhoto && (
+        <div
+          onClick={() => setActiveLightboxPhoto(null)}
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 animate-fade-in"
+        >
+          <button
+            onClick={() => setActiveLightboxPhoto(null)}
+            className="absolute top-4 right-4 text-white bg-black/50 p-2 rounded-full border border-white/20 cursor-pointer"
+          >
+            <X size={20} />
+          </button>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-md w-full flex flex-col items-center"
+          >
+            <img
+              src={activeLightboxPhoto.url}
+              alt={activeLightboxPhoto.caption || 'Stall Photo'}
+              className="max-h-[70vh] w-auto rounded-2xl object-contain shadow-2xl border border-white/10"
+            />
+            <div className="w-full mt-3 text-white text-center">
+              <h4 className="text-sm font-bold">{activeLightboxPhoto.caption}</h4>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Uploaded by {activeLightboxPhoto.uploadedBy}{' '}
+                {activeLightboxPhoto.uploadedRole ? `(${activeLightboxPhoto.uploadedRole})` : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -6,6 +6,9 @@ import {
   signInWithPopup,
   GoogleAuthProvider,
   updateProfile,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
   User as FirebaseUser
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
@@ -34,9 +37,11 @@ function saveLocalUsers(users: Record<string, UserProfile & { password?: string 
   }
 }
 
-// Helper: Map Firebase error codes to friendly messages
+// Helper: Map Firebase Auth AND Firestore error codes to friendly user-facing messages.
+// Raw technical codes are logged to console.error only — never shown to users.
 export function mapAuthErrorMessage(errorCode: string): string {
   switch (errorCode) {
+    // Firebase Auth
     case 'auth/email-already-in-use':
       return 'An account with this email already exists. Please log in instead.';
     case 'auth/invalid-email':
@@ -55,8 +60,26 @@ export function mapAuthErrorMessage(errorCode: string): string {
       return 'Too many attempts. Please wait a moment and try again.';
     case 'auth/popup-closed-by-user':
       return 'Google sign-in was cancelled.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled. Please contact support.';
+    // Firestore / Backend
+    case 'permission-denied':
+    case 'firestore/permission-denied':
+      return 'Access denied. Please try logging in again.';
+    case 'unavailable':
+    case 'firestore/unavailable':
+      return 'Service temporarily unavailable. Please check your connection and try again.';
+    case 'not-found':
+    case 'firestore/not-found':
+      return 'Your account data was not found. Please try again or contact support.';
+    case 'already-exists':
+      return 'This record already exists.';
+    case 'resource-exhausted':
+      return 'Too many requests. Please wait a moment and try again.';
+    case 'unauthenticated':
+      return 'You need to be logged in to perform this action.';
     default:
-      return errorCode || 'Authentication failed. Please try again.';
+      return 'Something went wrong. Please try again.';
   }
 }
 
@@ -90,27 +113,51 @@ export const authService = {
 
     // LIVE FIREBASE PATH
     if (isFirebaseConfigured && auth && db) {
+      // Step 1: Create Firebase Auth account
+      let cred: Awaited<ReturnType<typeof createUserWithEmailAndPassword>>;
       try {
-        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
         await updateProfile(cred.user, { displayName: cleanName });
-
-        const newProfile: UserProfile = {
-          uid: cred.user.uid,
-          name: cleanName,
-          email: cleanEmail,
-          phone: phone.trim(),
-          role,
-          profileImage: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
-          createdAt: new Date().toISOString(),
-          reviewsCount: 0
-        };
-
-        // Write user profile to Cloud Firestore: users/{uid}
-        await setDoc(doc(db, 'users', cred.user.uid), newProfile);
-        return newProfile;
       } catch (err: any) {
         throw new Error(mapAuthErrorMessage(err.code || err.message));
       }
+
+      // Step 2: Force token refresh so Firestore receives a valid request.auth
+      // This avoids the race condition where the ID token hasn't propagated yet.
+      try {
+        await cred.user.getIdToken(/* forceRefresh= */ true);
+      } catch {
+        // Non-fatal â€” proceed anyway; token may still be valid
+      }
+
+      const newProfile: UserProfile = {
+        uid: cred.user.uid,
+        name: cleanName,
+        email: cleanEmail,
+        phone: phone.trim(),
+        role,
+        profileImage: `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
+        createdAt: new Date().toISOString(),
+        reviewsCount: 0
+      };
+
+      // Step 3: Write user profile to Firestore: users/{uid}
+      // Rule: allow create if request.auth.uid == userId â€” satisfied because
+      // we use cred.user.uid as the document ID.
+      try {
+        await setDoc(doc(db, 'users', cred.user.uid), newProfile);
+      } catch (err: any) {
+        const code = err.code || err.message || '';
+        if (code.includes('permission-denied')) {
+          throw new Error(
+            'Account created but profile save failed (Firestore permission-denied). ' +
+            'Ensure Firestore rules allow: allow create: if request.auth.uid == userId;'
+          );
+        }
+        throw new Error(`Profile save failed: ${code}`);
+      }
+
+      return newProfile;
     }
 
     // LOCAL FALLBACK PATH
@@ -317,5 +364,58 @@ export const authService = {
     }
 
     return () => {};
+  },
+
+  /**
+   * Update authenticated user's Firebase Auth password.
+   * Performs re-authentication if required.
+   */
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('New password must be at least 6 characters long.');
+    }
+
+    // LIVE FIREBASE AUTH PATH
+    if (isFirebaseConfigured && auth && auth.currentUser) {
+      const user = auth.currentUser;
+      if (!user.email) {
+        throw new Error('No email found for current user session.');
+      }
+
+      // 1. Re-authenticate user before changing password
+      try {
+        const credential = EmailAuthProvider.credential(user.email, currentPassword);
+        await reauthenticateWithCredential(user, credential);
+      } catch (reauthErr: any) {
+        if (reauthErr.code === 'auth/wrong-password' || reauthErr.code === 'auth/invalid-credential') {
+          throw new Error('Current password is incorrect. Please verify and try again.');
+        }
+        throw new Error(mapAuthErrorMessage(reauthErr.code || reauthErr.message));
+      }
+
+      // 2. Update password in Firebase Auth (passwords NEVER stored in Firestore)
+      try {
+        await updatePassword(user, newPassword);
+        return;
+      } catch (pwErr: any) {
+        throw new Error(mapAuthErrorMessage(pwErr.code || pwErr.message));
+      }
+    }
+
+    // LOCAL FALLBACK PATH
+    const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
+    if (stored) {
+      const profile = JSON.parse(stored) as UserProfile;
+      const allUsers = getLocalUsers();
+      if (allUsers[profile.email]) {
+        if (allUsers[profile.email].password && allUsers[profile.email].password !== currentPassword) {
+          throw new Error('Current password is incorrect. Please verify and try again.');
+        }
+        allUsers[profile.email].password = newPassword;
+        saveLocalUsers(allUsers);
+        return;
+      }
+    }
   }
 };
+

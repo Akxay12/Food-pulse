@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
+import { getStorage, FirebaseStorage } from 'firebase/storage';
 
 // Read configuration from Vite environment variables (.env) or Node process.env
 const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : (process.env as any) || {};
@@ -23,11 +24,13 @@ export const isFirebaseConfigured = Boolean(
 );
 
 // External AI Vision API key check
-export const AI_API_KEY = env.VITE_AI_API_KEY || env.AI_API_KEY || env.VITE_GEMINI_API_KEY || '';
+export const AI_API_KEY = (env.VITE_AI_API_KEY || env.AI_API_KEY || '').trim().replace(/^["']|["']$/g, '');
 export const isAIConfigured = Boolean(
   AI_API_KEY &&
   AI_API_KEY.trim() !== '' &&
-  AI_API_KEY !== 'MY_AI_API_KEY'
+  AI_API_KEY !== 'MY_AI_API_KEY' &&
+  AI_API_KEY !== '""' &&
+  AI_API_KEY !== "''"
 );
 
 // External Google Maps API key check
@@ -41,12 +44,14 @@ export const isMapsConfigured = Boolean(
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let db: Firestore | null = null;
+let storage: FirebaseStorage | null = null;
 
 if (isFirebaseConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     auth = getAuth(app);
     db = getFirestore(app);
+    storage = getStorage(app);
     console.info('[FoodCheck] Firebase initialized successfully with project:', firebaseConfig.projectId);
   } catch (error) {
     console.warn('[FoodCheck] Failed to initialize live Firebase, falling back to local mode:', error);
@@ -55,4 +60,4 @@ if (isFirebaseConfigured) {
   console.info('[FoodCheck] Running with local simulated backend. Paste Firebase credentials in .env to connect to live Cloud Firestore.');
 }
 
-export { app, auth, db };
+export { app, auth, db, storage };

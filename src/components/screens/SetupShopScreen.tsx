@@ -1,45 +1,103 @@
-import React, { useState } from 'react';
-import { ArrowLeft, MapPin, Upload, CheckCircle2, Clock, Store, Camera, FileText, Loader2, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, MapPin, Upload, CheckCircle2, Clock, Store, Camera, FileText, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { FoodShop, MenuItem } from '../../types';
 import { shopService } from '../../services/shopService';
+import { mapService } from '../../services/mapService';
 
 interface SetupShopScreenProps {
   currentUserId?: string;
+  initialLocation?: { lat: number; lng: number; address?: string };
   onBack: () => void;
   onPublishShop: (newShop: FoodShop) => void;
 }
 
 export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
   currentUserId = 'local-shopkeeper-1',
+  initialLocation,
   onBack,
   onPublishShop
 }) => {
-  const [shopName, setShopName] = useState('Anand Vada Pav & Dosa Corner');
-  const [foodCategory, setFoodCategory] = useState('Mumbai Street Food & Snacks');
+  const [shopName, setShopName] = useState('');
+  const [foodCategory, setFoodCategory] = useState('');
   const [openingTime, setOpeningTime] = useState('08:00 AM');
   const [closingTime, setClosingTime] = useState('10:00 PM');
-  const [description, setDescription] = useState(
-    'Specializing in piping hot Vada Pav, Misal, and mineral-water based chutneys. Clean, hygienic preparation guaranteed.'
-  );
+  const [description, setDescription] = useState('');
 
   // Map Location Picker State
   const [isMapPickerOpen, setIsMapPickerOpen] = useState(false);
   const [pickedLocation, setPickedLocation] = useState({
-    address: 'Near Mithibai College, Vile Parle West, Mumbai',
-    lat: 19.019,
-    lng: 72.849,
+    address: initialLocation?.address || 'Fetching device GPS location...',
+    lat: initialLocation?.lat || 0,
+    lng: initialLocation?.lng || 0,
   });
 
-  const [shopImage, setShopImage] = useState(
-    'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=600&auto=format&fit=crop&q=80'
-  );
-  const [menuCardImage, setMenuCardImage] = useState(
-    'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600&auto=format&fit=crop&q=80'
-  );
+  const [shopImage, setShopImage] = useState('');
+  const [shopImageFile, setShopImageFile] = useState<File | null>(null);
+  const [menuCardImage, setMenuCardImage] = useState('');
+  const [menuCardImageFile, setMenuCardImageFile] = useState<File | null>(null);
+
+  // Fetch real device GPS coordinates on mount if no initial location passed
+  useEffect(() => {
+    if (initialLocation && initialLocation.lat && initialLocation.lng) {
+      setPickedLocation({
+        address: initialLocation.address || 'Selected Map Location',
+        lat: Number(initialLocation.lat.toFixed(6)),
+        lng: Number(initialLocation.lng.toFixed(6))
+      });
+      return;
+    }
+
+    mapService.getCurrentLocation().then(({ coords, status }) => {
+      if (coords) {
+        setPickedLocation({
+          address: 'Current Device GPS Location',
+          lat: Number(coords.lat.toFixed(6)),
+          lng: Number(coords.lng.toFixed(6))
+        });
+      } else {
+        setPickedLocation((prev) => ({
+          ...prev,
+          address: 'Please set or enable GPS location'
+        }));
+      }
+    });
+  }, [initialLocation]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
+
+  const handleImageFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+    setPreview: (val: string) => void,
+    setFile: (file: File | null) => void
+  ) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setFile(file);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setPreview(event.target.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRefreshLocation = async () => {
+    const { coords, status, message } = await mapService.getCurrentLocation();
+    if (coords) {
+      setPickedLocation({
+        address: 'Current Device GPS Location',
+        lat: Number(coords.lat.toFixed(6)),
+        lng: Number(coords.lng.toFixed(6))
+      });
+      setErrorMessage(null);
+    } else {
+      setErrorMessage(message || 'Unable to fetch device GPS location.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,6 +114,17 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
 
     setIsSubmitting(true);
     try {
+      let uploadedShopImage = shopImage;
+      let uploadedMenuImage = menuCardImage;
+
+      // Upload real files to Firebase Storage if selected
+      if (shopImageFile) {
+        uploadedShopImage = await shopService.uploadShopMedia(shopImageFile, currentUserId, 'stall');
+      }
+      if (menuCardImageFile) {
+        uploadedMenuImage = await shopService.uploadShopMedia(menuCardImageFile, currentUserId, 'menu');
+      }
+
       const createdShop = await shopService.createShop({
         ownerId: currentUserId,
         shopName: shopName.trim(),
@@ -65,14 +134,10 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
         longitude: pickedLocation.lng,
         openingTime,
         closingTime,
-        shopImage,
-        menuImage: menuCardImage,
+        shopImage: uploadedShopImage,
+        menuImage: uploadedMenuImage,
         address: pickedLocation.address,
-        menuItems: [
-          { id: 'm-new-1', name: 'Signature Butter Vada Pav', price: '₹25', isVeg: true, category: 'Fast Food' },
-          { id: 'm-new-2', name: 'Cheese Chutney Grill Sandwich', price: '₹70', isVeg: true, category: 'Snacks' },
-          { id: 'm-new-3', name: 'Special Cutting Chai', price: '₹15', isVeg: true, category: 'Beverages' },
-        ]
+        menuItems: []
       });
 
       setShowCelebration(true);
@@ -193,83 +258,127 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
           />
         </div>
 
-        {/* Location Section: "[ Select Location on Map ]" */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-2.5">
+        {/* Location Section */}
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-3">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-700">
-              Stall Location on Map
+            <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <MapPin size={14} className="text-orange-500" />
+              Stall GPS Location
             </label>
-            <span className="text-[10px] text-orange-600 font-bold">GPS Coordinates</span>
+            <button
+              type="button"
+              onClick={handleRefreshLocation}
+              className="text-[11px] text-orange-600 hover:text-orange-700 font-bold flex items-center gap-1 cursor-pointer"
+            >
+              <RefreshCw size={12} />
+              <span>Refresh GPS</span>
+            </button>
           </div>
 
-          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-start gap-2 text-xs text-slate-700">
-            <MapPin size={16} className="text-orange-500 mt-0.5 flex-shrink-0" />
-            <span className="font-semibold">{pickedLocation.address}</span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsMapPickerOpen(!isMapPickerOpen)}
-            className="w-full py-2.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-orange-800 text-xs font-bold border border-amber-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <MapPin size={14} />
-            <span>[ Select Location on Map ]</span>
-          </button>
-
-          {isMapPickerOpen && (
-            <div className="rounded-xl overflow-hidden border border-slate-300 relative h-36 bg-amber-950/10 p-2 animate-fade-in flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center mx-auto mb-1 animate-bounce shadow-md">
-                  <MapPin size={16} />
-                </div>
-                <span className="text-[11px] font-bold text-slate-800 block">
-                  Stall Pin Placed at: Mithibai College Road
-                </span>
-                <span className="text-[10px] text-slate-500">
-                  Lat: {pickedLocation.lat}, Lng: {pickedLocation.lng}
-                </span>
-              </div>
+          <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2">
+            <div className="font-semibold text-slate-800">{pickedLocation.address}</div>
+            <div className="flex items-center gap-3 text-[11px] text-slate-500 font-mono">
+              <span>Lat: <strong className="text-slate-800">{pickedLocation.lat || '—'}</strong></span>
+              <span>Lng: <strong className="text-slate-800">{pickedLocation.lng || '—'}</strong></span>
             </div>
-          )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-1">Latitude</label>
+              <input
+                type="number"
+                step="any"
+                value={pickedLocation.lat || ''}
+                onChange={(e) => setPickedLocation(prev => ({ ...prev, lat: parseFloat(e.target.value) || 0 }))}
+                placeholder="e.g. 19.0760"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-slate-800 focus:outline-hidden focus:border-orange-500"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 mb-1">Longitude</label>
+              <input
+                type="number"
+                step="any"
+                value={pickedLocation.lng || ''}
+                onChange={(e) => setPickedLocation(prev => ({ ...prev, lng: parseFloat(e.target.value) || 0 }))}
+                placeholder="e.g. 72.8777"
+                className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono text-slate-800 focus:outline-hidden focus:border-orange-500"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* Image & Menu Card Upload */}
+        {/* Real Image & Menu Card Upload */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-3">
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              Upload Shop Front Image
+              Upload Shop Front Image (Optional)
             </label>
             <div className="flex items-center gap-3">
-              <img src={shopImage} alt="Shop Front" className="w-14 h-14 rounded-xl object-cover ring-1 ring-slate-200" />
-              <button
-                type="button"
-                onClick={() =>
-                  setShopImage('https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=600&auto=format&fit=crop&q=80')
-                }
-                className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
+              {shopImage ? (
+                <div className="relative">
+                  <img src={shopImage} alt="Shop Front" className="w-14 h-14 rounded-xl object-cover ring-1 ring-slate-200" />
+                  <button
+                    type="button"
+                    onClick={() => setShopImage('')}
+                    className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full w-4 h-4 text-[10px] flex items-center justify-center cursor-pointer"
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <div className="w-14 h-14 rounded-xl bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400">
+                  <Camera size={18} />
+                </div>
+              )}
+              <label className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer">
                 <Camera size={14} />
-                <span>Change Image</span>
-              </button>
+                <span>{shopImage ? 'Change Image' : 'Select Photo'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageFileChange(e, setShopImage, setShopImageFile)}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 
           <div className="pt-2 border-t border-slate-100">
             <label className="block text-xs font-bold text-slate-700 mb-1.5">
-              Upload Menu Card
+              Upload Menu Card (Optional)
             </label>
             <div className="flex items-center gap-3">
-              <img src={menuCardImage} alt="Menu Card" className="w-14 h-14 rounded-xl object-cover ring-1 ring-slate-200" />
-              <button
-                type="button"
-                onClick={() =>
-                  setMenuCardImage('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600&auto=format&fit=crop&q=80')
-                }
-                className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
+              {menuCardImage ? (
+                <div className="relative">
+                  <img src={menuCardImage} alt="Menu Card" className="w-14 h-14 rounded-xl object-cover ring-1 ring-slate-200" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuCardImage('');
+                      setMenuCardImageFile(null);
+                    }}
+                    className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full w-4 h-4 text-[10px] flex items-center justify-center cursor-pointer"
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <div className="w-14 h-14 rounded-xl bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400">
+                  <FileText size={18} />
+                </div>
+              )}
+              <label className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer">
                 <FileText size={14} />
-                <span>Upload Menu Photo</span>
-              </button>
+                <span>{menuCardImage ? 'Change Menu' : 'Select Menu Photo'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageFileChange(e, setMenuCardImage, setMenuCardImageFile)}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
         </div>

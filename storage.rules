@@ -1,0 +1,61 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 1. Food Community Videos
+    match /videos/{userId}/{fileName} {
+      // Community videos can be viewed by anyone in the feed
+      allow read: if true;
+      
+      // Upload allowed only by authenticated user for their own directory
+      // Max file size: 100MB, must be video content
+      allow create, update: if isOwner(userId)
+                            && request.resource.size < 100 * 1024 * 1024
+                            && request.resource.contentType.matches('video/.*');
+      
+      allow delete: if isOwner(userId);
+    }
+
+    // 2. Video Thumbnails & Food Discovery Photos
+    match /thumbnails/{userId}/{fileName} {
+      allow read: if true;
+      allow create, update: if isOwner(userId)
+                            && request.resource.size < 15 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if isOwner(userId);
+    }
+
+    // 3. User Avatars & Profile Images
+    match /avatars/{userId}/{fileName} {
+      allow read: if true;
+      allow create, update: if isOwner(userId)
+                            && request.resource.size < 10 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if isOwner(userId);
+    }
+
+    // 4. Shopkeeper Store Images & Menu Cards
+    match /shops/{userId}/{fileName} {
+      allow read: if true;
+      allow create, update: if isOwner(userId)
+                            && request.resource.size < 15 * 1024 * 1024
+                            && request.resource.contentType.matches('image/.*');
+      allow delete: if isOwner(userId);
+    }
+
+    // 5. General User Uploads
+    match /users/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write, delete: if isOwner(userId);
+    }
+  }
+}

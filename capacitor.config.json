@@ -1,0 +1,13 @@
+{
+  "appId": "com.foodcheck.app",
+  "appName": "FoodCheck",
+  "webDir": "dist",
+  "plugins": {
+    "Camera": {
+      "permissions": ["camera", "photos"]
+    },
+    "Geolocation": {
+      "permissions": ["location"]
+    }
+  }
+}

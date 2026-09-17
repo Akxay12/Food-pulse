@@ -16,6 +16,7 @@ import { LanguageScreen } from './components/screens/LanguageScreen';
 import { ShopkeeperDashboard } from './components/screens/ShopkeeperDashboard';
 import { SetupShopScreen } from './components/screens/SetupShopScreen';
 import { ShopkeeperProfileScreen } from './components/screens/ShopkeeperProfileScreen';
+import FirebaseTestScreen from './components/screens/FirebaseTestScreen';
 
 import {
   AppScreen,
@@ -54,23 +55,25 @@ export default function App() {
   const [language, setLanguage] = useState<SupportedLanguage>('en');
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
-  // Authenticated User State (Module 1E & 1F)
+  // Authenticated User State — starts empty; populated by onAuthStateChanged
   const [user, setUser] = useState({
-    uid: 'local-default-user',
-    name: 'Harshal Lad',
-    username: '@harshal',
-    email: 'harshallad2007@gmail.com',
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    reviewsCount: 24,
-    videosCount: 7,
-    likesCount: 143,
+    uid: '',
+    name: '',
+    username: '',
+    email: '',
+    avatarUrl: '',
+    reviewsCount: 0,
+    videosCount: 0,
+    likesCount: 0,
   });
 
-  // App Data State (Realistic, durable state with in-memory reactivity)
+  // App Data State — starts empty; loaded from Firestore via loadAppData()
   const [recentScans, setRecentScans] = useState<FoodScanResult[]>(INITIAL_RECENT_SCANS);
-  const [activeScanResult, setActiveScanResult] = useState<FoodScanResult>(INITIAL_RECENT_SCANS[0]);
+  const [activeScanResult, setActiveScanResult] = useState<FoodScanResult | null>(null);
   const [shops, setShops] = useState<FoodShop[]>(INITIAL_SHOPS);
-  const [activeShop, setActiveShop] = useState<FoodShop>(INITIAL_SHOPS[0]);
+  const [activeShop, setActiveShop] = useState<FoodShop | null>(null);
+  const [shopSourceScreen, setShopSourceScreen] = useState<AppScreen>('home');
+  const [pendingStallLocation, setPendingStallLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [videos, setVideos] = useState<FoodVideo[]>(INITIAL_VIDEOS);
   const [badges, setBadges] = useState<UserBadge[]>(INITIAL_BADGES);
   const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
@@ -236,6 +239,7 @@ export default function App() {
 
   const handleSelectShop = (shop: FoodShop) => {
     setActiveShop(shop);
+    setShopSourceScreen(currentScreen);
     setCurrentScreen('shop_details');
   };
 
@@ -358,23 +362,30 @@ export default function App() {
     await videoService.toggleLikeVideo(videoId, user.uid);
   };
 
-  const handleUploadVideo = async (videoData: Partial<FoodVideo>) => {
+  const handleUploadVideo = async (
+    videoData: Partial<FoodVideo> & { videoFile?: File | Blob; thumbnailFile?: File | Blob },
+    onProgress?: (progress: number) => void
+  ): Promise<FoodVideo> => {
     const uploadRes = await videoService.uploadVideo(
       {
         foodName: videoData.foodName || 'Delicious Street Dish',
         shopName: videoData.shopName || 'Nearby Stall',
         caption: videoData.caption || 'Checked food freshness on FoodCheck!',
-        thumbnailUrl: videoData.thumbnailUrl || 'https://images.unsplash.com/photo-1606491956689-2ea866880c84?w=600&auto=format&fit=crop&q=80',
+        thumbnailUrl: videoData.thumbnailUrl,
+        videoUrl: videoData.videoUrl,
+        videoFile: videoData.videoFile,
+        thumbnailFile: videoData.thumbnailFile
       },
       {
         uid: user.uid,
         name: user.name,
         avatarUrl: user.avatarUrl
-      }
+      },
+      onProgress
     );
     const uploaded = uploadRes.video;
 
-    const nextCount = user.videosCount + 1;
+    const nextCount = uploadRes.totalVideosCount || user.videosCount + 1;
     setUser((prev) => ({ ...prev, videosCount: nextCount }));
     setVideos((prev) => [uploaded, ...prev]);
 
@@ -397,6 +408,8 @@ export default function App() {
       });
       setNotifications((prev) => [notif, ...prev]);
     }
+
+    return uploaded;
   };
 
   // Shopkeeper Actions
@@ -491,7 +504,7 @@ export default function App() {
       )}
 
       {/* 5. AI Result Screen */}
-      {currentScreen === 'scanner_result' && (
+      {currentScreen === 'scanner_result' && activeScanResult && (
         <ResultScreen
           scanResult={activeScanResult}
           onBack={() => setCurrentScreen('home')}
@@ -508,17 +521,24 @@ export default function App() {
         <MapScreen
           shops={shops}
           onSelectShop={handleSelectShop}
-          onOpenShopkeeperSetup={() => setCurrentScreen('shopkeeper_setup')}
+          onOpenShopkeeperSetup={(initialLoc) => {
+            if (initialLoc) {
+              setPendingStallLocation(initialLoc);
+            }
+            setCurrentScreen('shopkeeper_setup');
+          }}
+          currentUserId={user.uid}
+          userRole={userRole}
           t={t}
         />
       )}
 
       {/* 7. Shop Details Screen */}
-      {currentScreen === 'shop_details' && (
+      {currentScreen === 'shop_details' && activeShop && (
         <ShopDetailsScreen
           shop={activeShop}
           currentUserId={user.uid}
-          onBack={() => setCurrentScreen('home')}
+          onBack={() => setCurrentScreen(shopSourceScreen || 'home')}
           onWriteReview={(shopId) => setCurrentScreen('review_create')}
           onToggleLikeReview={handleToggleLikeReview}
         />
@@ -528,7 +548,7 @@ export default function App() {
       {currentScreen === 'review_create' && (
         <UserReviewScreen
           shops={shops}
-          initialShopId={activeShop.id}
+          initialShopId={activeShop?.id ?? ''}
           onBack={() => setCurrentScreen('shop_details')}
           onSubmitReview={handleSubmitReview}
         />
@@ -547,6 +567,7 @@ export default function App() {
       {/* 10. User Profile Screen (Module 1F) */}
       {currentScreen === 'profile' && (
         <ProfileScreen
+          userId={user.uid}
           name={user.name}
           username={user.username}
           email={user.email}
@@ -558,12 +579,19 @@ export default function App() {
           likesCount={user.likesCount}
           onNavigate={(screen) => setCurrentScreen(screen)}
           onSwitchRole={() => {
-            setUserRole('shopkeeper');
-            setCurrentScreen('shopkeeper_dashboard');
+            const nextRole = userRole === 'shopkeeper' ? 'user' : 'shopkeeper';
+            setUserRole(nextRole);
+            setCurrentScreen(nextRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'home');
           }}
           onLogout={handleLogout}
           recentScans={recentScans}
           videos={videos}
+          onSelectScanResult={handleSelectScanResult}
+          onAvatarUpdated={(newUrl) => {
+            setUser((prev) => ({ ...prev, avatarUrl: newUrl }));
+          }}
+          currentLanguage={language}
+          onSelectLanguage={(lang) => setLanguage(lang)}
         />
       )}
 
@@ -586,8 +614,13 @@ export default function App() {
       {/* 12. Setup Shop Screen */}
       {currentScreen === 'shopkeeper_setup' && (
         <SetupShopScreen
+          currentUserId={user.uid}
+          initialLocation={pendingStallLocation || undefined}
           onBack={() => setCurrentScreen(userRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'map')}
-          onPublishShop={handlePublishShop}
+          onPublishShop={(newShop) => {
+            setPendingStallLocation(null);
+            handlePublishShop(newShop);
+          }}
         />
       )}
 
@@ -619,6 +652,11 @@ export default function App() {
           onBack={() => setCurrentScreen('home')}
           onMarkAllRead={handleMarkAllRead}
         />
+      )}
+
+      {/* 16. Firebase Connection Test Screen */}
+      {currentScreen === 'firebase_test' && (
+        <FirebaseTestScreen />
       )}
 
       {/* Bottom Navigation Bar (Shown on core mobile screens) */}

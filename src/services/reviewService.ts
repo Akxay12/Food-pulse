@@ -27,36 +27,7 @@ function getLocalReviews(): ReviewDocument[] {
     // Ignore
   }
 
-  const initial: ReviewDocument[] = [
-    {
-      reviewId: 'rev-init-1',
-      userId: 'user-sample-1',
-      userName: 'Aakash Verma',
-      userProfileImage: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80',
-      targetId: 'shop-1',
-      targetType: 'shop',
-      rating: 5,
-      subRatings: { Hygiene: 5, Cleanliness: 5, Service: 4 },
-      reviewText: 'Exceptionally clean stall. The owner wears gloves and the sev puri is unmatched in Dadar!',
-      likesCount: 126,
-      dislikesCount: 0,
-      createdAt: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
-    },
-    {
-      reviewId: 'rev-init-2',
-      userId: 'user-sample-2',
-      userName: 'Priya Sharma',
-      userProfileImage: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80',
-      targetId: 'shop-1',
-      targetType: 'shop',
-      rating: 4,
-      subRatings: { Hygiene: 4, Cleanliness: 4, Service: 5 },
-      reviewText: 'Hot vada pav served immediately. Good oil quality with noticeable clarity.',
-      likesCount: 42,
-      dislikesCount: 1,
-      createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-    }
-  ];
+  const initial: ReviewDocument[] = [];
   saveLocalReviews(initial);
   return initial;
 }
@@ -132,6 +103,12 @@ export const reviewService = {
         const reviewRef = doc(db, 'reviews', reviewId);
         await setDoc(reviewRef, newReview);
         await userService.incrementUserReviewCount(data.userId, 1);
+        
+        // Also keep in local storage so it is immediately available
+        const local = getLocalReviews();
+        local.unshift(newReview);
+        saveLocalReviews(local);
+
         return newReview;
       } catch (err: any) {
         console.warn('Failed to save review to Cloud Firestore, falling back to local:', err);
@@ -155,59 +132,63 @@ export const reviewService = {
     targetType?: 'food' | 'shop',
     currentUserId?: string
   ): Promise<ReviewDocument[]> {
+    let reviews: ReviewDocument[] = [];
+    let firestoreSuccess = false;
+
     // LIVE FIREBASE PATH
     if (isFirebaseConfigured && db) {
       try {
         const reviewsRef = collection(db, 'reviews');
         let q = query(
           reviewsRef,
-          where('targetId', '==', targetId),
-          orderBy('createdAt', 'desc')
+          where('targetId', '==', targetId)
         );
         if (targetType) {
           q = query(
             reviewsRef,
             where('targetId', '==', targetId),
-            where('targetType', '==', targetType),
-            orderBy('createdAt', 'desc')
+            where('targetType', '==', targetType)
           );
         }
         const querySnapshot = await getDocs(q);
-        const reviews: ReviewDocument[] = [];
 
         for (const docSnap of querySnapshot.docs) {
           const rev = docSnap.data() as ReviewDocument;
           // Check reaction for current user if logged in
           if (currentUserId) {
-            const likeDoc = await getDoc(doc(db, 'reviews', rev.reviewId, 'likes', currentUserId));
-            if (likeDoc.exists()) {
-              rev.userReaction = 'like';
-            } else {
-              const dislikeDoc = await getDoc(doc(db, 'reviews', rev.reviewId, 'dislikes', currentUserId));
-              if (dislikeDoc.exists()) {
-                rev.userReaction = 'dislike';
+            try {
+              const likeDoc = await getDoc(doc(db, 'reviews', rev.reviewId, 'likes', currentUserId));
+              if (likeDoc.exists()) {
+                rev.userReaction = 'like';
+              } else {
+                const dislikeDoc = await getDoc(doc(db, 'reviews', rev.reviewId, 'dislikes', currentUserId));
+                if (dislikeDoc.exists()) {
+                  rev.userReaction = 'dislike';
+                }
               }
+            } catch {
+              // Ignore reaction check failure
             }
           }
           reviews.push(rev);
         }
-        return reviews;
+        firestoreSuccess = true;
       } catch (err: any) {
-        console.warn('Failed to fetch reviews from Firestore, using local fallback:', err);
+        console.warn('Failed to fetch reviews from Firestore, merging local fallback:', err);
       }
     }
 
-    // LOCAL FALLBACK PATH
+    // LOCAL MERGE / FALLBACK PATH
     const local = getLocalReviews();
     const likes = getLocalReactions(STORAGE_LIKES_KEY);
     const dislikes = getLocalReactions(STORAGE_DISLIKES_KEY);
 
-    const filtered = local.filter((r) => {
+    const filteredLocal = local.filter((r) => {
       const matchTarget = r.targetId === targetId;
       return targetType ? matchTarget && r.targetType === targetType : matchTarget;
     });
 
-    return filtered.map((r) => {
+    const localMapped = filteredLocal.map((r) => {
       let reaction: 'like' | 'dislike' | null = null;
       if (currentUserId) {
         if (likes[r.reviewId]?.[currentUserId]) reaction = 'like';
@@ -215,6 +196,26 @@ export const reviewService = {
       }
       return { ...r, userReaction: reaction };
     });
+
+    if (!firestoreSuccess) {
+      reviews = localMapped;
+    } else {
+      // Merge any local reviews that might not yet be synced to Firestore
+      for (const loc of localMapped) {
+        if (!reviews.some((r) => r.reviewId === loc.reviewId)) {
+          reviews.push(loc);
+        }
+      }
+    }
+
+    // Sort descending by date in memory
+    reviews.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return reviews;
   },
 
   /**
@@ -463,9 +464,10 @@ export const reviewService = {
     if (isFirebaseConfigured && db) {
       try {
         const reviewsRef = collection(db, 'reviews');
-        const q = query(reviewsRef, where('userId', '==', userId), orderBy('createdAt', 'desc'));
+        const q = query(reviewsRef, where('userId', '==', userId));
         const snapshot = await getDocs(q);
         const reviews: ReviewDocument[] = snapshot.docs.map((d) => d.data() as ReviewDocument);
+        reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         const totalLikes = reviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
         return { reviews, totalLikes };
       } catch (err) {
@@ -490,7 +492,7 @@ export const reviewService = {
   }> {
     const reviews = await this.getReviews(shopId);
     if (reviews.length === 0) {
-      return { rating: 4.5, foodQualityRating: 4.6, hygieneRating: 4.5, reviewsCount: 0 };
+      return { rating: 0, foodQualityRating: 0, hygieneRating: 0, reviewsCount: 0 };
     }
 
     let totalRating = 0;

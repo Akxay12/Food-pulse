@@ -103,26 +103,26 @@ export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
               My Stall
             </span>
             <span className="text-sm font-extrabold text-slate-900 truncate block mt-0.5">
-              {currentShop ? currentShop.name : 'Shree Snacks & Sweets'}
+              {currentShop ? currentShop.name : 'No stall registered'}
             </span>
             <span className="text-[10px] text-orange-600 font-semibold">
-              Live on FoodCheck Map
+              {currentShop ? 'Live on FoodCheck Map' : 'Tap below to register'}
             </span>
           </div>
 
           {/* Card 2: Ratings */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs">
             <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center mb-2">
-              <Star size={16} className="fill-amber-500" />
+              <Star size={16} className={currentShop && currentShop.rating > 0 ? "fill-amber-500 text-amber-500" : "text-slate-300"} />
             </div>
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
               Customer Rating
             </span>
-            <span className="text-lg font-black text-slate-900 block mt-0.5">
-              ⭐ {currentShop ? currentShop.rating : '4.6'} / 5
+            <span className="text-base font-black text-slate-900 block mt-0.5">
+              {currentShop && currentShop.rating > 0 ? `⭐ ${currentShop.rating} / 5` : 'No ratings yet'}
             </span>
             <span className="text-[10px] text-slate-400 font-medium">
-              Hygiene {currentShop ? currentShop.hygieneRating : '4.5'}★
+              {currentShop && currentShop.hygieneRating > 0 ? `Hygiene ${currentShop.hygieneRating}★` : 'Hygiene: Not rated'}
             </span>
           </div>
 
@@ -135,26 +135,26 @@ export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
               Reviews
             </span>
             <span className="text-lg font-black text-slate-900 block mt-0.5">
-              {currentShop ? currentShop.reviews.length + 82 : '84'}
+              {currentShop ? (currentShop.reviewsCount ?? currentShop.reviews?.length ?? 0) : 0}
             </span>
             <span className="text-[10px] text-orange-600 font-semibold">
-              96% Positive feedback
+              {currentShop && (currentShop.reviewsCount || currentShop.reviews?.length) ? 'Verified reviews' : 'No reviews yet'}
             </span>
           </div>
 
-          {/* Card 4: Views */}
+          {/* Card 4: Status / Visibility */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 shadow-xs">
             <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center mb-2">
               <Eye size={16} />
             </div>
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
-              Map Views
+              Map Status
             </span>
-            <span className="text-lg font-black text-slate-900 block mt-0.5">
-              1,240
+            <span className="text-sm font-black text-slate-900 block mt-0.5 truncate">
+              {currentShop ? (currentShop.isOpen ? '🟢 Open Now' : '🔴 Closed') : 'Not Published'}
             </span>
             <span className="text-[10px] text-slate-400 font-medium">
-              This week nearby
+              {currentShop ? 'FoodCheck Stall' : 'Ready to setup'}
             </span>
           </div>
         </div>
