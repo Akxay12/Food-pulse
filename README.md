@@ -1,20 +1,52 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# 🍽️ FoodCheck
 
-# Run and deploy your AI Studio app
+FoodCheck is an AI-powered Android app for food safety scanning, local food stall discovery, ratings, reviews, and community sharing.
 
-This contains everything you need to run your app locally.
+## 🚀 Features
 
-View your app in AI Studio: https://ai.studio/apps/95674585-dc5f-459f-85e4-c57e7239b672
+- 🤖 AI Food Scanner powered by Google Gemini
+- 📸 Camera & gallery food scanning
+- 📍 Discover nearby FoodCheck-registered food stalls
+- 🏪 Register and publish your own food stall
+- ⭐ Food & stall ratings
+- 💬 Stall reviews and review reactions
+- 👤 User profiles & profile picture
+- 🎥 Food video uploads
+- 🏆 Community badges
+- 🗺️ Google Maps integration
+- 🔥 Firebase Authentication, Firestore & Storage
+- 📱 Native Android support
 
-## Run Locally
+## 🛠️ Tech Stack
 
-**Prerequisites:**  Node.js
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- Capacitor
+- Android
+- Firebase
+- Google Gemini AI
+- Google Maps
 
+## 🤖 AI Food Scanning
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+FoodCheck uses Google Gemini Vision to analyze food images and provide a visual/package-based assessment.
+
+If the Gemini API fails, FoodCheck displays the actual API/network error instead of generating a fake result.
+
+> ⚠️ AI visual analysis cannot detect hidden bacteria, pathogens, toxins, or other microscopic contaminants. It should not replace laboratory testing or professional food-safety inspection.
+
+## 📱 Android
+
+Application ID:
+
+`com.foodcheck.app`
+
+## 🔗 Project
+
+GitHub: https://github.com/Akxay12/Food-pulse
+
+## 📄 License
+
+This project is developed as a hackathon/project application.
