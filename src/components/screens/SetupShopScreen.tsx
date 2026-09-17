@@ -113,6 +113,20 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
     }
 
     setIsSubmitting(true);
+
+    // Automatically obtain shopkeeper's CURRENT GPS location at submission time
+    const { coords, message } = await mapService.getCurrentLocation();
+    if (!coords) {
+      setErrorMessage(
+        message || 'GPS location permission is required to create a stall at your location. Please allow location access and try again.'
+      );
+      setIsSubmitting(false);
+      return;
+    }
+
+    const currentLat = Number(coords.lat.toFixed(6));
+    const currentLng = Number(coords.lng.toFixed(6));
+
     try {
       let uploadedShopImage = shopImage;
       let uploadedMenuImage = menuCardImage;
@@ -130,13 +144,13 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
         shopName: shopName.trim(),
         category: foodCategory.trim(),
         description: description.trim(),
-        latitude: pickedLocation.lat,
-        longitude: pickedLocation.lng,
+        latitude: currentLat,
+        longitude: currentLng,
         openingTime,
         closingTime,
         shopImage: uploadedShopImage,
         menuImage: uploadedMenuImage,
-        address: pickedLocation.address,
+        address: pickedLocation.address || 'Current Device GPS Location',
         menuItems: []
       });
 
@@ -152,7 +166,7 @@ export const SetupShopScreen: React.FC<SetupShopScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
       {/* Top Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button

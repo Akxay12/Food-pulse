@@ -10,7 +10,7 @@ import {
   orderBy,
   runTransaction
 } from 'firebase/firestore';
-import { db, isFirebaseConfigured } from './firebase';
+import { auth, db, isFirebaseConfigured } from './firebase';
 import { ReviewDocument } from '../types';
 import { userService } from './userService';
 
@@ -459,26 +459,33 @@ export const reviewService = {
    * Get all reviews authored by a user and total helpful likes received
    */
   async getUserReviewsAndLikes(userId: string): Promise<{ reviews: ReviewDocument[]; totalLikes: number }> {
-    if (!userId) return { reviews: [], totalLikes: 0 };
+    const effectiveUid = userId || auth?.currentUser?.uid;
+    if (!effectiveUid) return { reviews: [], totalLikes: 0 };
 
+    let reviews: ReviewDocument[] = [];
     if (isFirebaseConfigured && db) {
       try {
         const reviewsRef = collection(db, 'reviews');
-        const q = query(reviewsRef, where('userId', '==', userId));
+        const q = query(reviewsRef, where('userId', '==', effectiveUid));
         const snapshot = await getDocs(q);
-        const reviews: ReviewDocument[] = snapshot.docs.map((d) => d.data() as ReviewDocument);
-        reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-        const totalLikes = reviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
-        return { reviews, totalLikes };
+        reviews = snapshot.docs.map((d) => d.data() as ReviewDocument);
       } catch (err) {
         console.warn('Error fetching user reviews from Firestore:', err);
       }
     }
 
+    // Merge any local reviews for effectiveUid that might not be synced yet
     const local = getLocalReviews();
-    const userReviews = local.filter((r) => r.userId === userId);
-    const totalLikes = userReviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
-    return { reviews: userReviews, totalLikes };
+    const userLocal = local.filter((r) => r.userId === effectiveUid);
+    for (const loc of userLocal) {
+      if (!reviews.some((r) => r.reviewId === loc.reviewId)) {
+        reviews.push(loc);
+      }
+    }
+
+    reviews.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    const totalLikes = reviews.reduce((sum, r) => sum + (r.likesCount || 0), 0);
+    return { reviews, totalLikes };
   },
 
   /**

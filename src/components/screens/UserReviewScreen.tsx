@@ -1,5 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { ArrowLeft, Star, Camera, Upload, CheckCircle2, Store, UtensilsCrossed, Loader2, AlertCircle, X } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { FoodShop, ShopReview } from '../../types';
 import { shopService } from '../../services/shopService';
 
@@ -44,6 +46,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
 
   const [reviewText, setReviewText] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -66,7 +69,45 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     const file = e.target.files?.[0];
     if (file) {
       setPhotoFile(file);
+      setPhotoDataUrl(null);
       setPhotoPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const handleTriggerPhotoPick = async () => {
+    setErrorMessage(null);
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const perm = await CapCamera.checkPermissions();
+        if (perm.camera !== 'granted' || perm.photos !== 'granted') {
+          const req = await CapCamera.requestPermissions({ permissions: ['camera', 'photos'] });
+          if (req.camera === 'denied' && req.photos === 'denied') {
+            setErrorMessage('Please grant camera & photo permissions in device settings.');
+            return;
+          }
+        }
+
+        const photo = await CapCamera.getPhoto({
+          quality: 85,
+          allowEditing: false,
+          resultType: CameraResultType.DataUrl,
+          source: CameraSource.Prompt
+        });
+
+        if (photo?.dataUrl) {
+          setPhotoDataUrl(photo.dataUrl);
+          setPhotoPreview(photo.dataUrl);
+          setPhotoFile(null);
+        }
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('dismiss')) {
+          return;
+        }
+        fileInputRef.current?.click();
+      }
+    } else {
+      fileInputRef.current?.click();
     }
   };
 
@@ -85,8 +126,9 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
     setErrorMessage(null);
     try {
       let finalPhotoUrl: string | undefined = undefined;
-      if (photoFile) {
-        finalPhotoUrl = await shopService.uploadShopMedia(photoFile, selectedShopId || 'user', 'stall');
+      const mediaToUpload = photoDataUrl || photoFile;
+      if (mediaToUpload) {
+        finalPhotoUrl = await shopService.uploadShopMedia(mediaToUpload, selectedShopId || 'user', 'stall');
       }
 
       await onSubmitReview({
@@ -108,7 +150,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
       {/* Top Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button
@@ -277,7 +319,7 @@ export const UserReviewScreen: React.FC<UserReviewScreenProps> = ({
           ) : (
             <button
               type="button"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={handleTriggerPhotoPick}
               className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-500 hover:border-orange-500 hover:text-orange-700 transition-colors cursor-pointer"
             >
               <Camera size={18} />

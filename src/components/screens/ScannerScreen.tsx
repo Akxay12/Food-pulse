@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Zap, ZapOff, RefreshCw, Camera, Upload, AlertCircle, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
 import { ScanType, FoodScanResult } from '../../types';
 import { aiService, MANDATORY_LAB_DISCLAIMER } from '../../services/aiService';
 import { LogoPlaceholder } from '../common/Logo';
@@ -29,12 +31,101 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+  const timersRef = useRef<any[]>([]);
 
+  const isNative = Capacitor.isNativePlatform();
   // Placeholder preview when no image is selected and camera is off
   const currentPreviewImage = customImage || null;
 
-  // Camera handling
-  const startCamera = async () => {
+  // Native Android / Capacitor Camera Capture flow
+  const handleNativeCameraTrigger = async () => {
+    setCameraError(null);
+    try {
+      if (Capacitor.isNativePlatform()) {
+        // Step 1: Check whether Android camera permission is already granted
+        const perm = await CapCamera.checkPermissions();
+        if (perm.camera !== 'granted') {
+          // Step 1a: Request Android camera permission
+          const req = await CapCamera.requestPermissions({ permissions: ['camera'] });
+          if (req.camera !== 'granted') {
+            // Step 1b: Show clear user message
+            setCameraError('Please allow camera access to scan food.');
+            return;
+          }
+        }
+      }
+
+      // Step 2: Open real native Android camera using @capacitor/camera with native image dimension constraints
+      const photo = await CapCamera.getPhoto({
+        quality: 80,
+        width: 1024,
+        height: 1024,
+        correctOrientation: true,
+        allowEditing: false,
+        resultType: CameraResultType.DataUrl,
+        source: CameraSource.Camera
+      });
+
+      const photoUrl = photo?.dataUrl || (photo?.base64String ? `data:image/jpeg;base64,${photo.base64String}` : null);
+      if (photoUrl) {
+        setCustomImage(photoUrl);
+        setCameraError(null);
+      }
+    } catch (err: any) {
+      const message = String(err?.message || '');
+      if (message.toLowerCase().includes('cancel') || message.toLowerCase().includes('dismiss') || message.toLowerCase().includes('user cancelled')) {
+        console.info('[FoodCheck] User dismissed native camera.');
+      } else if (message.toLowerCase().includes('denied') || message.toLowerCase().includes('permission')) {
+        setCameraError('Please allow camera access to scan food.');
+      } else {
+        console.warn('[FoodCheck] Native camera capture error:', err);
+      }
+    }
+  };
+
+  const handleScannerSectionTap = async () => {
+    if (isNative) {
+      await handleNativeCameraTrigger();
+    } else {
+      // Desktop browser fallback: open file chooser or start web cam
+      if (fileInputRef.current) {
+        fileInputRef.current.click();
+      }
+    }
+  };
+
+  const handleNativeGalleryPick = async () => {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const photo = await CapCamera.getPhoto({
+          quality: 80,
+          width: 1024,
+          height: 1024,
+          correctOrientation: true,
+          allowEditing: false,
+          resultType: CameraResultType.DataUrl,
+          source: CameraSource.Photos
+        });
+        const photoUrl = photo?.dataUrl || (photo?.base64String ? `data:image/jpeg;base64,${photo.base64String}` : null);
+        if (photoUrl) {
+          setCustomImage(photoUrl);
+          setCameraError(null);
+          return;
+        }
+      }
+    } catch (err: any) {
+      console.info('[FoodCheck] Native gallery picker fallback:', err);
+    }
+    fileInputRef.current?.click();
+  };
+
+  // Browser-only camera handling for desktop testing
+  const startWebCamera = async () => {
+    if (Capacitor.isNativePlatform()) {
+      await handleNativeCameraTrigger();
+      return;
+    }
     setCameraError(null);
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -49,18 +140,14 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
       setCameraPermissionStatus('granted');
       setUseLiveCamera(true);
     } catch (err: any) {
-      console.warn('[FoodCheck] Camera access denied or unavailable:', err);
+      console.warn('[FoodCheck] Browser camera access error:', err);
       setCameraPermissionStatus('denied');
-      setCameraError(
-        err.name === 'NotAllowedError'
-          ? 'Camera permission was denied. You can use the gallery upload button below.'
-          : 'Camera device is unavailable. Please use the gallery upload button.'
-      );
+      setCameraError('Camera access is unavailable on this browser. Please use the gallery upload button.');
       setUseLiveCamera(false);
     }
   };
 
-  const stopCamera = () => {
+  const stopWebCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -70,14 +157,21 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
   };
 
   useEffect(() => {
-    return () => { stopCamera(); };
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      stopWebCamera();
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current = [];
+    };
   }, []);
 
   // Capture & Analyse
   const handleCapture = async () => {
     let capturedImage = currentPreviewImage;
 
-    if (useLiveCamera && videoRef.current && canvasRef.current) {
+    // Desktop browser live preview snapshot
+    if (!isNative && useLiveCamera && videoRef.current && canvasRef.current) {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       canvas.width = video.videoWidth || 640;
@@ -88,11 +182,15 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
         capturedImage = canvas.toDataURL('image/jpeg', 0.85);
         setCustomImage(capturedImage);
       }
-      stopCamera();
+      stopWebCamera();
     }
 
     if (!capturedImage) {
-      setCameraError('Please take a photo or upload an image before scanning.');
+      if (isNative) {
+        await handleNativeCameraTrigger();
+        return;
+      }
+      fileInputRef.current?.click();
       return;
     }
 
@@ -104,12 +202,18 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
       type: capturedImage.startsWith('data:') ? capturedImage.split(';')[0] : 'image/jpeg'
     });
 
+    // Clear existing timers
+    timersRef.current.forEach((t) => clearTimeout(t));
+    timersRef.current = [];
+
     setAnalysisError(null);
     setIsAnalyzing(true);
     setAnalysisStep(1);
-    const t1 = setTimeout(() => setAnalysisStep(2), 500);
-    const t2 = setTimeout(() => setAnalysisStep(3), 1000);
-    const t3 = setTimeout(() => setAnalysisStep(4), 1500);
+
+    const t1 = setTimeout(() => { if (isMountedRef.current) setAnalysisStep(2); }, 600);
+    const t2 = setTimeout(() => { if (isMountedRef.current) setAnalysisStep(3); }, 1400);
+    const t3 = setTimeout(() => { if (isMountedRef.current) setAnalysisStep(4); }, 2200);
+    timersRef.current.push(t1, t2, t3);
 
     try {
       const result = await aiService.analyzeFoodImage({
@@ -117,24 +221,34 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
         scanType,
         language: 'en',
       });
-      setIsAnalyzing(false);
+
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current = [];
+
+      if (isMountedRef.current) {
+        setIsAnalyzing(false);
+      }
       onAnalysisComplete(result);
     } catch (err: any) {
       console.error('[FoodCheck Scanner] AI analysis pipeline error:', err);
-      setIsAnalyzing(false);
-      setAnalysisError(
-        err?.message ||
-        'AI Food analysis failed. Please verify your Gemini API key and ensure the food image is clear.'
-      );
-    }
 
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current = [];
+
+      if (isMountedRef.current) {
+        setIsAnalyzing(false);
+        setAnalysisError(
+          err?.message ||
+          'AI Food analysis failed. Please verify your Gemini API key and ensure the food image is clear.'
+        );
+      }
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      stopCamera();
+      stopWebCamera();
       const reader = new FileReader();
       reader.onload = (event) => {
         if (event.target?.result) setCustomImage(event.target.result as string);
@@ -151,7 +265,7 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
       {/* Top Camera Controls Bar */}
       <div className="absolute top-0 left-0 right-0 z-30 flex items-center justify-between p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent">
         <button
-          onClick={() => { stopCamera(); onBack(); }}
+          onClick={() => { stopWebCamera(); onBack(); }}
           className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md border border-white/20 flex items-center justify-center text-white active:scale-90 transition-transform cursor-pointer"
           aria-label="Back"
         >
@@ -190,12 +304,18 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
         </button>
       </div>
 
-      {/* Main Viewfinder Area */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+      {/* Main Viewfinder Area — Large top scanner section */}
+      <div
+        onClick={handleScannerSectionTap}
+        role="button"
+        tabIndex={0}
+        aria-label="Tap to open camera to scan food"
+        className="flex-1 relative flex items-center justify-center overflow-hidden cursor-pointer select-none group"
+      >
         {flashOn && <div className="absolute inset-0 bg-amber-100/20 pointer-events-none z-10" />}
 
-        {/* Live Camera Feed or Upload Preview */}
-        {useLiveCamera ? (
+        {/* Live Camera Feed (browser testing only) or Captured Preview */}
+        {!isNative && useLiveCamera ? (
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
         ) : currentPreviewImage ? (
           <div className="w-full h-full relative flex items-center justify-center bg-slate-950">
@@ -205,13 +325,20 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
               className="w-full h-full object-cover opacity-90 transition-opacity duration-300"
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/60 pointer-events-none" />
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full bg-black/70 backdrop-blur-md border border-white/20 text-[11px] font-medium text-amber-300 shadow-md flex items-center gap-1.5 pointer-events-none">
+              <Camera size={13} />
+              <span>Tap to retake photo</span>
+            </div>
           </div>
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-slate-950">
-            <div className="flex flex-col items-center gap-4 text-slate-400">
-              <Camera size={48} strokeWidth={1.5} className="opacity-30" />
-              <p className="text-sm font-medium opacity-60">Open camera or upload a photo</p>
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 transition-colors group-hover:bg-slate-900/60 p-6">
+            <div className="w-20 h-20 rounded-full bg-amber-500/10 border-2 border-dashed border-amber-400/40 flex items-center justify-center text-amber-400 mb-3 shadow-inner group-active:scale-95 transition-transform">
+              <Camera size={38} strokeWidth={1.75} />
             </div>
+            <p className="text-sm font-semibold text-white tracking-tight">Tap to open camera</p>
+            <p className="text-xs text-slate-400 mt-1 text-center max-w-[220px]">
+              Tap anywhere in this area to take a photo with your device camera
+            </p>
           </div>
         )}
 
@@ -246,15 +373,36 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
           </div>
         </div>
 
-        {/* Camera Error Banner */}
+        {/* Camera Error / Permission Banner */}
         {cameraError && (
-          <div className="absolute bottom-24 left-4 right-4 z-30 bg-black/80 backdrop-blur-md border border-amber-500/40 p-3 rounded-2xl flex items-start gap-2.5 text-xs text-amber-200 animate-fade-in">
-            <AlertCircle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="absolute bottom-6 left-4 right-4 z-30 bg-black/90 backdrop-blur-md border border-amber-500/60 p-3 rounded-2xl flex items-start gap-2.5 text-xs text-amber-200 shadow-xl animate-fade-in"
+          >
+            <AlertCircle size={17} className="text-amber-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <p className="font-semibold text-white">{cameraError}</p>
-              <button onClick={() => setCameraError(null)} className="text-[10px] text-amber-400 font-bold underline mt-1">
-                Dismiss
-              </button>
+              <p className="font-semibold text-white leading-snug">{cameraError}</p>
+              <div className="flex items-center gap-3 mt-1.5">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCameraError(null);
+                  }}
+                  className="text-[10px] text-slate-400 hover:text-white font-medium cursor-pointer"
+                >
+                  Dismiss
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setCameraError(null);
+                    handleScannerSectionTap();
+                  }}
+                  className="text-[10px] text-amber-400 hover:text-amber-300 font-bold underline cursor-pointer"
+                >
+                  Grant & Open Camera
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -263,8 +411,10 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
       {/* Bottom Shutter & Controls */}
       <div className="bg-slate-950 px-6 pt-3 pb-8 flex items-center justify-around z-20 border-t border-slate-800/40">
         <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
+        
+        {/* Gallery button */}
         <button
-          onClick={() => fileInputRef.current?.click()}
+          onClick={handleNativeGalleryPick}
           className="w-12 h-12 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all cursor-pointer"
           title="Upload food photo from gallery"
         >
@@ -272,32 +422,49 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
           <span className="text-[9px] font-medium">Gallery</span>
         </button>
 
-        {/* Big Shutter Button */}
+        {/* Big Shutter / Action Button */}
         <button
           onClick={handleCapture}
           className="w-20 h-20 rounded-full p-1.5 bg-gradient-to-tr from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-500/40 active:scale-95 transition-all group cursor-pointer"
-          aria-label="Capture Food Image"
+          aria-label={currentPreviewImage ? "Analyze Food Image" : "Open Camera"}
         >
           <div className="w-full h-full rounded-full bg-white flex items-center justify-center group-hover:scale-95 transition-transform">
-            <div className="w-13 h-13 rounded-full bg-orange-500 flex items-center justify-center text-white">
-              <Camera size={24} strokeWidth={2.4} />
+            <div className={`w-13 h-13 rounded-full flex items-center justify-center text-white ${
+              currentPreviewImage ? 'bg-amber-600' : 'bg-orange-500'
+            }`}>
+              {currentPreviewImage ? (
+                <Zap size={24} className="fill-white" />
+              ) : (
+                <Camera size={24} strokeWidth={2.4} />
+              )}
             </div>
           </div>
         </button>
 
-        {/* Live Camera Toggle */}
-        <button
-          onClick={() => { if (useLiveCamera) stopCamera(); else startCamera(); }}
-          className={`w-12 h-12 rounded-2xl border flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all cursor-pointer ${
-            useLiveCamera
-              ? 'bg-amber-500/30 border-amber-400 text-amber-300'
-              : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-          }`}
-          title="Toggle live device camera"
-        >
-          <RefreshCw size={18} />
-          <span className="text-[9px] font-medium">{useLiveCamera ? 'Live ON' : 'Live Cam'}</span>
-        </button>
+        {/* Right Action: Camera / Retake on native Android, or Live Cam toggle on desktop web */}
+        {isNative ? (
+          <button
+            onClick={handleNativeCameraTrigger}
+            className="w-12 h-12 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all cursor-pointer"
+            title={currentPreviewImage ? "Retake photo" : "Open camera"}
+          >
+            {currentPreviewImage ? <RefreshCw size={18} /> : <Camera size={18} />}
+            <span className="text-[9px] font-medium">{currentPreviewImage ? 'Retake' : 'Camera'}</span>
+          </button>
+        ) : (
+          <button
+            onClick={() => { if (useLiveCamera) stopWebCamera(); else startWebCamera(); }}
+            className={`w-12 h-12 rounded-2xl border flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-all cursor-pointer ${
+              useLiveCamera
+                ? 'bg-amber-500/30 border-amber-400 text-amber-300'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
+            }`}
+            title="Toggle live camera preview"
+          >
+            <RefreshCw size={18} />
+            <span className="text-[9px] font-medium">{useLiveCamera ? 'Live ON' : 'Live Cam'}</span>
+          </button>
+        )}
       </div>
 
       {/* Analysis Error Modal */}
@@ -307,8 +474,8 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
             <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center mx-auto">
               <AlertCircle size={24} />
             </div>
-            <h4 className="text-base font-bold text-white tracking-tight">AI Food Scan Notice</h4>
-            <p className="text-xs text-slate-300 leading-relaxed text-left bg-slate-950/80 p-3 rounded-xl border border-slate-800 break-words">
+            <h4 className="text-base font-bold text-red-400 tracking-tight">AI Food Scan Failed</h4>
+            <p className="text-xs text-slate-300 leading-relaxed text-left bg-slate-950/80 p-3 rounded-xl border border-red-500/30 break-words whitespace-pre-line font-mono">
               {analysisError}
             </p>
             <div className="flex gap-2 pt-1">
@@ -347,7 +514,7 @@ export const ScannerScreen: React.FC<ScannerScreenProps> = ({
             {t.analyzingFood || 'Analyzing Food with Gemini AI...'}
           </h3>
           <p className="text-xs text-amber-400 font-semibold mt-1">
-            Google Gemini 2.5 Flash Vision Engine
+            Google Gemini 3.6 Flash Vision Engine
           </p>
 
           <div className="w-full max-w-xs mt-6 space-y-2.5 text-left bg-slate-900/90 p-4 rounded-2xl border border-slate-800">

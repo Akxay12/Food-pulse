@@ -109,7 +109,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
 
 
   return (
-    <div className="flex-1 flex flex-col p-6 bg-gradient-to-b from-[#FFFDF7] via-[#FFFBF2] to-[#FAF7F2] overflow-y-auto">
+    <div className="flex-1 min-h-0 flex flex-col p-6 bg-gradient-to-b from-[#FFFDF7] via-[#FFFBF2] to-[#FAF7F2] overflow-y-auto">
       {/* Top Logo */}
       <div className="pt-2 pb-5 flex items-center justify-between">
         <Logo size="sm" showTagline={false} />

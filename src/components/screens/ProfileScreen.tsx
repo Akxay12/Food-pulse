@@ -20,28 +20,34 @@ import {
   User,
   ThumbsUp
 } from 'lucide-react';
-import { UserBadge, AppScreen, FoodScanResult, FoodVideo, ReviewDocument, SupportedLanguage } from '../../types';
+import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
+import { UserBadge, AppScreen, FoodScanResult, FoodVideo, ReviewDocument, SupportedLanguage, UserProfile } from '../../types';
 import { reviewService } from '../../services/reviewService';
 import { videoService } from '../../services/videoService';
 import { userService } from '../../services/userService';
 import { authService } from '../../services/authService';
+import { badgeService } from '../../services/badgeService';
+import { foodScanService } from '../../services/foodScanService';
 import { SUPPORTED_LANGUAGES } from '../../utils/translations';
 
 interface ProfileScreenProps {
   userId?: string;
+  currentAuthUserId?: string;
   name?: string;
   username?: string;
   email?: string;
   role?: string;
   avatarUrl?: string;
-  badges: UserBadge[];
+  badges?: UserBadge[];
   reviewsCount?: number;
   videosCount?: number;
   likesCount?: number;
   onNavigate: (screen: AppScreen) => void;
-  onSwitchRole: () => void;
-  onLogout: () => void;
-  recentScans: FoodScanResult[];
+  onBack?: () => void;
+  onSwitchRole?: () => void;
+  onLogout?: () => void;
+  recentScans?: FoodScanResult[];
   videos?: FoodVideo[];
   onSelectScanResult?: (scan: FoodScanResult) => void;
   onAvatarUpdated?: (newUrl: string) => void;
@@ -51,6 +57,7 @@ interface ProfileScreenProps {
 
 export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   userId = '',
+  currentAuthUserId = '',
   name = 'FoodCheck User',
   username = '',
   email = '',
@@ -61,6 +68,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   videosCount: propVideosCount,
   likesCount: propLikesCount,
   onNavigate,
+  onBack,
   onSwitchRole,
   onLogout,
   recentScans = [],
@@ -70,12 +78,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   currentLanguage = 'en',
   onSelectLanguage
 }) => {
+  // Determine if viewing own profile vs another user's public profile
+  const isOwnProfile = !userId || !currentAuthUserId || userId === currentAuthUserId;
+
   // Content Tab State (Reviews | Videos | Scans)
   const [activeContentTab, setActiveContentTab] = useState<'reviews' | 'videos' | 'scans'>('reviews');
 
   // Real User Data fetched from Firebase
   const [userReviews, setUserReviews] = useState<ReviewDocument[]>([]);
   const [userVideos, setUserVideos] = useState<FoodVideo[]>([]);
+  const [ownScans, setOwnScans] = useState<FoodScanResult[]>(recentScans);
+  const [loadedProfile, setLoadedProfile] = useState<UserProfile | null>(null);
   const [totalHelpfulLikes, setTotalHelpfulLikes] = useState<number>(propLikesCount || 0);
   const [isLoadingContent, setIsLoadingContent] = useState<boolean>(true);
 
@@ -85,7 +98,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
-  // Settings Panel & Modal State
+  // Settings Panel & Modal State (own profile only)
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [settingsView, setSettingsView] = useState<'menu' | 'language' | 'privacy' | 'password'>('menu');
 
@@ -104,28 +117,55 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     }
   }, [avatarUrl]);
 
-  // Fetch real reviews and real videos authored by this user
+  // Sync recentScans if passed as prop
+  useEffect(() => {
+    if (recentScans && recentScans.length > 0) {
+      setOwnScans(recentScans);
+    }
+  }, [recentScans]);
+
+  // Fetch real reviews, real videos, and public profile data for this user
   useEffect(() => {
     let isMounted = true;
+    const activeUid = userId || currentAuthUserId;
+
     const loadUserData = async () => {
-      if (!userId) {
+      if (!activeUid) {
         setIsLoadingContent(false);
         return;
       }
       setIsLoadingContent(true);
       try {
-        const [reviewsData, userVids] = await Promise.all([
-          reviewService.getUserReviewsAndLikes(userId),
-          videoService.getUserVideos(userId)
-        ]);
+        const promises: [
+          Promise<{ reviews: ReviewDocument[]; totalLikes: number }>,
+          Promise<FoodVideo[]>,
+          Promise<UserProfile | null>,
+          Promise<FoodScanResult[]>
+        ] = [
+          reviewService.getUserReviewsAndLikes(activeUid),
+          videoService.getUserVideos(activeUid),
+          userService.getUserProfile(activeUid),
+          isOwnProfile ? foodScanService.getUserScans(activeUid) : Promise.resolve([])
+        ];
+
+        const [reviewsData, userVids, profileDoc, scansData] = await Promise.all(promises);
 
         if (isMounted) {
           setUserReviews(reviewsData.reviews || []);
           setTotalHelpfulLikes(reviewsData.totalLikes || 0);
           setUserVideos(userVids || []);
+          if (profileDoc) {
+            setLoadedProfile(profileDoc);
+            if (profileDoc.profileImage) {
+              setLocalAvatar(profileDoc.profileImage);
+            }
+          }
+          if (isOwnProfile && scansData) {
+            setOwnScans(scansData);
+          }
         }
       } catch (err) {
-        console.warn('Error loading real user profile data:', err);
+        console.warn('Error loading user profile data:', err);
       } finally {
         if (isMounted) {
           setIsLoadingContent(false);
@@ -137,31 +177,94 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [userId]);
+  }, [userId, currentAuthUserId, isOwnProfile]);
 
-  // Handle Profile Photo Upload via Camera or Gallery
-  const handleAvatarFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 10 * 1024 * 1024) {
-      setAvatarError('Image file size must be less than 10MB.');
-      return;
-    }
-
+  // Image processing & upload to Firebase Storage
+  const processAndUploadImage = async (fileOrDataUrl: File | string) => {
     setIsUploadingAvatar(true);
     setAvatarError(null);
 
     try {
-      const newPhotoUrl = await userService.uploadAvatar(file, userId || 'user');
+      let uploadBlob: Blob;
+      let contentType = 'image/jpeg';
+
+      if (typeof fileOrDataUrl === 'string') {
+        const res = await fetch(fileOrDataUrl);
+        uploadBlob = await res.blob();
+        contentType = uploadBlob.type || 'image/jpeg';
+      } else {
+        uploadBlob = fileOrDataUrl;
+        contentType = fileOrDataUrl.type || 'image/jpeg';
+      }
+
+      if (uploadBlob.size > 10 * 1024 * 1024) {
+        throw new Error('Image file size must be less than 10MB.');
+      }
+
+      if (!contentType.startsWith('image/')) {
+        throw new Error('Selected file must be an image (JPEG, PNG, or WebP).');
+      }
+
+      const effectiveUid = currentAuthUserId || userId;
+      const newPhotoUrl = await userService.uploadAvatar(uploadBlob, effectiveUid);
       setLocalAvatar(newPhotoUrl);
       if (onAvatarUpdated) {
         onAvatarUpdated(newPhotoUrl);
       }
     } catch (err: any) {
-      setAvatarError(err.message || 'Failed to upload profile photo.');
+      console.error('Failed to upload profile photo:', err);
+      setAvatarError(err.message || 'Failed to upload profile photo. Please try again.');
     } finally {
       setIsUploadingAvatar(false);
+    }
+  };
+
+  // Handle Triggering Photo Upload (Android native Capacitor Camera / Gallery OR Web file picker)
+  const handleTriggerPhotoUpload = async () => {
+    if (!isOwnProfile) return;
+    setAvatarError(null);
+
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const perm = await CapCamera.checkPermissions();
+        if (perm.camera !== 'granted' || perm.photos !== 'granted') {
+          const req = await CapCamera.requestPermissions({ permissions: ['camera', 'photos'] });
+          if (req.camera === 'denied' && req.photos === 'denied') {
+            setAvatarError('Please grant camera & photo permissions in device settings.');
+            return;
+          }
+        }
+
+        const photo = await CapCamera.getPhoto({
+          quality: 85,
+          allowEditing: false,
+          resultType: CameraResultType.DataUrl,
+          source: CameraSource.Prompt
+        });
+
+        if (photo?.dataUrl) {
+          await processAndUploadImage(photo.dataUrl);
+        }
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (msg.toLowerCase().includes('cancel') || msg.toLowerCase().includes('dismiss')) {
+          return;
+        }
+        console.warn('Native photo picker error:', err);
+        avatarInputRef.current?.click();
+      }
+    } else {
+      avatarInputRef.current?.click();
+    }
+  };
+
+  // Web input file selection fallback
+  const handleAvatarFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processAndUploadImage(file);
+    if (avatarInputRef.current) {
+      avatarInputRef.current.value = '';
     }
   };
 
@@ -202,12 +305,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
     }
   };
 
+  // Public vs Own Display Information
+  const displayName = isOwnProfile ? name : (loadedProfile?.name || name || 'FoodCheck Contributor');
+  const displayRole = isOwnProfile ? role : (loadedProfile?.role || role || 'user');
+  const displayAvatar = isOwnProfile ? (localAvatar || avatarUrl) : (loadedProfile?.profileImage || localAvatar || avatarUrl);
+
   // Real Counts matching actual user data
   const realReviewsCount = userReviews.length > 0 ? userReviews.length : (propReviewsCount || 0);
   const realVideosCount = userVideos.length > 0 ? userVideos.length : (propVideosCount || 0);
   
-  // Filter strictly earned badges (no hardcoding, no permanently unlocked fake badges)
-  const earnedBadges = badges.filter((b) => b.isUnlocked && !b.isLockedDueToCondition);
+  // Calculate dynamic badges accurately for own profile or public profile
+  const targetBadges = isOwnProfile
+    ? badges
+    : badgeService.evaluateBadges({
+        videoCount: userVideos.length,
+        userReviews: userReviews,
+        totalHelpfulLikes: totalHelpfulLikes,
+        scanCount: 0
+      }).badges;
+
+  const earnedBadges = targetBadges.filter((b) => b.isUnlocked && !b.isLockedDueToCondition);
   const realBadgesCount = earnedBadges.length;
 
   return (
@@ -215,231 +332,270 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* Scrollable Profile Content */}
       <div className="flex-1 min-h-0 overflow-y-auto pb-20">
         {/* 1. INSTAGRAM-STYLE PROFILE HEADER */}
-      <div className="bg-white p-5 border-b border-slate-200/80 shadow-2xs">
-        {/* Top Header Row: Settings Button in top right */}
-        <div className="flex items-center justify-between mb-4">
-          <span className="text-xs font-black uppercase tracking-wider text-slate-500">
-            Profile
-          </span>
-          <button
-            onClick={() => {
-              setSettingsView('menu');
-              setIsSettingsOpen(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95 border border-slate-200"
-            title="Open Settings"
-          >
-            <Settings size={14} className="text-slate-600" />
-            <span>Settings</span>
-          </button>
-        </div>
+        <div className="bg-white p-5 border-b border-slate-200/80 shadow-2xs">
+          {/* Top Header Row */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              {onBack && (
+                <button
+                  onClick={onBack}
+                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 active:scale-95 transition-transform cursor-pointer"
+                  aria-label="Back"
+                >
+                  <ArrowLeft size={16} />
+                </button>
+              )}
+              <span className="text-xs font-black uppercase tracking-wider text-slate-500">
+                {isOwnProfile ? 'Profile' : 'Public Profile'}
+              </span>
+            </div>
 
-        {/* Profile Avatar & 3-Column Stats (Instagram Pattern) */}
-        <div className="flex items-center gap-6">
-          {/* Avatar with Camera Overlay */}
-          <div className="relative flex-shrink-0">
-            <input
-              type="file"
-              ref={avatarInputRef}
-              accept="image/*"
-              className="hidden"
-              onChange={handleAvatarFileSelect}
-            />
+            {isOwnProfile && (
+              <button
+                onClick={() => {
+                  setSettingsView('menu');
+                  setIsSettingsOpen(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95 border border-slate-200"
+                title="Open Settings"
+              >
+                <Settings size={14} className="text-slate-600" />
+                <span>Settings</span>
+              </button>
+            )}
+          </div>
 
-            <div
-              onClick={() => avatarInputRef.current?.click()}
-              className="w-20 h-20 rounded-full overflow-hidden ring-3 ring-orange-500/30 shadow-md cursor-pointer relative group bg-slate-100 flex items-center justify-center"
-              title="Tap to change profile photo"
-            >
-              {localAvatar ? (
-                <img
-                  src={localAvatar}
-                  alt={name}
-                  className="w-full h-full object-cover group-hover:opacity-80 transition-opacity"
+          {/* Profile Avatar & 3-Column Stats */}
+          <div className="flex items-center gap-6">
+            {/* Avatar */}
+            <div className="relative flex-shrink-0">
+              {isOwnProfile && (
+                <input
+                  type="file"
+                  ref={avatarInputRef}
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleAvatarFileSelect}
                 />
-              ) : (
-                <div className="w-full h-full bg-gradient-to-br from-amber-500 to-orange-600 text-white font-black text-2xl flex items-center justify-center">
-                  {(name || 'U').charAt(0).toUpperCase()}
-                </div>
               )}
 
-              {isUploadingAvatar && (
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white">
-                  <Loader2 size={20} className="animate-spin text-orange-400" />
-                </div>
-              )}
+              <div
+                onClick={isOwnProfile ? handleTriggerPhotoUpload : undefined}
+                className={`w-20 h-20 rounded-full overflow-hidden ring-3 ring-orange-500/30 shadow-md relative group bg-slate-100 flex items-center justify-center ${
+                  isOwnProfile ? 'cursor-pointer' : ''
+                }`}
+                title={isOwnProfile ? 'Tap to change profile photo' : displayName}
+              >
+                {displayAvatar ? (
+                  <img
+                    src={displayAvatar}
+                    alt={displayName}
+                    className={`w-full h-full object-cover transition-opacity ${
+                      isOwnProfile ? 'group-hover:opacity-80' : ''
+                    }`}
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-amber-500 to-orange-600 text-white font-black text-2xl flex items-center justify-center">
+                    {(displayName || 'U').charAt(0).toUpperCase()}
+                  </div>
+                )}
 
-              <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
-                <Camera size={18} />
+                {isUploadingAvatar && (
+                  <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white">
+                    <Loader2 size={20} className="animate-spin text-orange-400" />
+                  </div>
+                )}
+
+                {isOwnProfile && (
+                  <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 flex items-center justify-center text-white transition-opacity">
+                    <Camera size={18} />
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Camera Badge for own profile */}
+              {isOwnProfile && (
+                <button
+                  type="button"
+                  onClick={handleTriggerPhotoUpload}
+                  className="absolute -bottom-1 -right-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white p-1.5 rounded-full border-2 border-white shadow-xs cursor-pointer active:scale-90 transition-transform"
+                  title="Upload new photo"
+                >
+                  <Camera size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* 3-Column Real Stats */}
+            <div className="flex-1 grid grid-cols-3 gap-1 text-center">
+              <div className="flex flex-col items-center">
+                <span className="text-base font-black text-slate-900 leading-tight">
+                  {realReviewsCount}
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Reviews
+                </span>
+              </div>
+
+              <div className="flex flex-col items-center">
+                <span className="text-base font-black text-slate-900 leading-tight">
+                  {realVideosCount}
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Videos
+                </span>
+              </div>
+
+              <div className="flex flex-col items-center">
+                <span className="text-base font-black text-orange-600 leading-tight">
+                  {realBadgesCount}
+                </span>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Badges
+                </span>
               </div>
             </div>
-
-            {/* Quick Camera Badge on bottom right of avatar */}
-            <button
-              onClick={() => avatarInputRef.current?.click()}
-              className="absolute -bottom-1 -right-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white p-1.5 rounded-full border-2 border-white shadow-xs cursor-pointer active:scale-90 transition-transform"
-              title="Upload new photo"
-            >
-              <Camera size={12} />
-            </button>
           </div>
 
-          {/* 3-Column Real Stats */}
-          <div className="flex-1 grid grid-cols-3 gap-1 text-center">
-            <div className="flex flex-col items-center">
-              <span className="text-base font-black text-slate-900 leading-tight">
-                {realReviewsCount}
-              </span>
-              <span className="text-[11px] text-slate-500 font-medium">
-                Reviews
-              </span>
-            </div>
-
-            <div className="flex flex-col items-center">
-              <span className="text-base font-black text-slate-900 leading-tight">
-                {realVideosCount}
-              </span>
-              <span className="text-[11px] text-slate-500 font-medium">
-                Videos
+          {/* User Identity & Role Pill */}
+          <div className="mt-3.5 space-y-0.5">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-black text-slate-900 tracking-tight">
+                {displayName}
+              </h2>
+              <span
+                className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                  displayRole === 'shopkeeper'
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                }`}
+              >
+                {displayRole === 'shopkeeper' ? '🏪 Shopkeeper' : '👤 Verified Foodie'}
               </span>
             </div>
 
-            <div className="flex flex-col items-center">
-              <span className="text-base font-black text-orange-600 leading-tight">
-                {realBadgesCount}
-              </span>
-              <span className="text-[11px] text-slate-500 font-medium">
-                Badges
-              </span>
-            </div>
+            {/* Private email shown only on own profile */}
+            {isOwnProfile && (
+              <p className="text-xs text-slate-500 font-medium">
+                {email || (username ? `@${username}` : '')}
+              </p>
+            )}
           </div>
+
+          {/* Action Button Row for Own Profile Only */}
+          {isOwnProfile && (
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={handleTriggerPhotoUpload}
+                disabled={isUploadingAvatar}
+                className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-200/80 disabled:opacity-60"
+              >
+                <Camera size={13} />
+                <span>Change Photo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsView('menu');
+                  setIsSettingsOpen(true);
+                }}
+                className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-200/80"
+              >
+                <Settings size={13} />
+                <span>Account Settings</span>
+              </button>
+            </div>
+          )}
+
+          {avatarError && (
+            <div className="mt-2.5 p-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] flex items-center gap-1.5">
+              <AlertCircle size={13} className="flex-shrink-0" />
+              <span>{avatarError}</span>
+            </div>
+          )}
         </div>
 
-        {/* User Identity & Role Pill */}
-        <div className="mt-3.5 space-y-0.5">
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-black text-slate-900 tracking-tight">
-              {name || 'FoodCheck Contributor'}
-            </h2>
-            <span
-              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                role === 'shopkeeper'
-                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                  : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-              }`}
-            >
-              {role === 'shopkeeper' ? '🏪 Shopkeeper' : '👤 Verified Foodie'}
+        {/* 2. HORIZONTAL EARNED BADGES ROW */}
+        <div className="px-4 pt-4 pb-2">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+              Earned Badges ({earnedBadges.length})
+            </span>
+            <span className="text-[10px] text-slate-400 font-medium">
+              Dynamic achievements
             </span>
           </div>
 
-          <p className="text-xs text-slate-500 font-medium">
-            {email || (username ? `@${username}` : '')}
-          </p>
-        </div>
-
-        {/* Action Button Row */}
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={() => avatarInputRef.current?.click()}
-            className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-200/80"
-          >
-            <Camera size={13} />
-            <span>Change Photo</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setSettingsView('menu');
-              setIsSettingsOpen(true);
-            }}
-            className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-slate-200/80"
-          >
-            <Settings size={13} />
-            <span>Account Settings</span>
-          </button>
-        </div>
-
-        {avatarError && (
-          <div className="mt-2.5 p-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] flex items-center gap-1.5">
-            <AlertCircle size={13} className="flex-shrink-0" />
-            <span>{avatarError}</span>
-          </div>
-        )}
-      </div>
-
-      {/* 2. HORIZONTAL EARNED BADGES ROW */}
-      <div className="px-4 pt-4 pb-2">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-            Earned Badges ({earnedBadges.length})
-          </span>
-          <span className="text-[10px] text-slate-400 font-medium">
-            Dynamic achievements
-          </span>
-        </div>
-
-        {earnedBadges.length > 0 ? (
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
-            {earnedBadges.map((badge) => (
-              <div
-                key={badge.id}
-                className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-white border border-amber-300/80 shadow-2xs text-slate-800 flex-shrink-0"
-              >
-                <span className="text-base">{badge.icon || '🏅'}</span>
-                <div>
-                  <h4 className="text-xs font-black text-slate-900 leading-tight">
-                    {badge.title}
-                  </h4>
-                  <span className="text-[10px] text-amber-700 font-semibold block">
-                    {badge.unlockedDetail || 'Unlocked Achievement'}
-                  </span>
+          {earnedBadges.length > 0 ? (
+            <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+              {earnedBadges.map((badge) => (
+                <div
+                  key={badge.id}
+                  className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-white border border-amber-300/80 shadow-2xs text-slate-800 flex-shrink-0"
+                >
+                  <span className="text-base">{badge.icon || '🏅'}</span>
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 leading-tight">
+                      {badge.title}
+                    </h4>
+                    <span className="text-[10px] text-amber-700 font-semibold block">
+                      {badge.unlockedDetail || 'Unlocked Achievement'}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 text-center text-xs text-slate-400">
-            <Award size={18} className="mx-auto mb-1 text-slate-300" />
-            <span>No badges earned yet. Review stalls and share food videos to earn achievements!</span>
-          </div>
-        )}
-      </div>
-
-      {/* 3. USER CONTENT TABS: Reviews | Videos | Scans */}
-      <div className="mt-2 bg-white border-y border-slate-200/80 sticky top-0 z-20 shadow-2xs">
-        <div className="flex items-center justify-around px-2">
-          <button
-            onClick={() => setActiveContentTab('reviews')}
-            className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
-              activeContentTab === 'reviews'
-                ? 'border-orange-500 text-orange-600'
-                : 'border-transparent text-slate-400 hover:text-slate-700'
-            }`}
-          >
-            Reviews ({userReviews.length})
-          </button>
-          <button
-            onClick={() => setActiveContentTab('videos')}
-            className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
-              activeContentTab === 'videos'
-                ? 'border-orange-500 text-orange-600'
-                : 'border-transparent text-slate-400 hover:text-slate-700'
-            }`}
-          >
-            Videos ({userVideos.length})
-          </button>
-          <button
-            onClick={() => setActiveContentTab('scans')}
-            className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
-              activeContentTab === 'scans'
-                ? 'border-orange-500 text-orange-600'
-                : 'border-transparent text-slate-400 hover:text-slate-700'
-            }`}
-          >
-            Scans ({recentScans.length})
-          </button>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-3.5 text-center text-xs text-slate-400">
+              <Award size={18} className="mx-auto mb-1 text-slate-300" />
+              <span>
+                {isOwnProfile
+                  ? 'No badges earned yet. Review stalls and share food videos to earn achievements!'
+                  : 'No public badges earned yet.'}
+              </span>
+            </div>
+          )}
         </div>
-      </div>
+
+        {/* 3. USER CONTENT TABS: Reviews | Videos | Scans (Scans only for own profile) */}
+        <div className="mt-2 bg-white border-y border-slate-200/80 sticky top-0 z-20 shadow-2xs">
+          <div className="flex items-center justify-around px-2">
+            <button
+              onClick={() => setActiveContentTab('reviews')}
+              className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                activeContentTab === 'reviews'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-slate-400 hover:text-slate-700'
+              }`}
+            >
+              Reviews ({userReviews.length})
+            </button>
+            <button
+              onClick={() => setActiveContentTab('videos')}
+              className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                activeContentTab === 'videos'
+                  ? 'border-orange-500 text-orange-600'
+                  : 'border-transparent text-slate-400 hover:text-slate-700'
+              }`}
+            >
+              Videos ({userVideos.length})
+            </button>
+            {isOwnProfile && (
+              <button
+                onClick={() => setActiveContentTab('scans')}
+                className={`flex-1 py-3 text-center text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeContentTab === 'scans'
+                    ? 'border-orange-500 text-orange-600'
+                    : 'border-transparent text-slate-400 hover:text-slate-700'
+                }`}
+              >
+                Scans ({ownScans.length})
+              </button>
+            )}
+          </div>
+        </div>
 
       {/* Tab Content Body */}
       <div className="p-4 space-y-3">
@@ -548,10 +704,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               </div>
             )}
 
-            {/* Private Food Scans Content */}
-            {activeContentTab === 'scans' && (
+            {/* Private Food Scans Content (Strictly Own Profile) */}
+            {isOwnProfile && activeContentTab === 'scans' && (
               <div className="space-y-2.5">
-                {recentScans.length === 0 ? (
+                {ownScans.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-200/80 p-8 text-center text-slate-400">
                     <Camera size={32} className="mx-auto mb-2 text-slate-300" />
                     <h4 className="text-xs font-bold text-slate-700 mb-0.5">No food safety scans recorded</h4>
@@ -560,7 +716,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     </p>
                   </div>
                 ) : (
-                  recentScans.map((scan) => (
+                  ownScans.map((scan) => (
                     <div
                       key={scan.id}
                       onClick={() => onSelectScanResult && onSelectScanResult(scan)}

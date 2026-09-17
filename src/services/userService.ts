@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc, increment } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, increment } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { updateProfile } from 'firebase/auth';
 import { auth, db, storage, isFirebaseConfigured } from './firebase';
@@ -47,15 +47,14 @@ export const userService = {
   async updateUserProfile(uid: string, updates: Partial<UserProfile>): Promise<void> {
     if (isFirebaseConfigured && db) {
       try {
-        const ref = doc(db, 'users', uid);
-        await updateDoc(ref, updates as any);
-        return;
+        const userRef = doc(db, 'users', uid);
+        await setDoc(userRef, updates as any, { merge: true });
       } catch (err) {
         console.warn('Error updating profile in Firestore:', err);
       }
     }
 
-    // Local fallback
+    // Local fallback and local cache update
     try {
       const stored = localStorage.getItem(STORAGE_CURRENT_KEY);
       if (stored) {
@@ -64,6 +63,11 @@ export const userService = {
           const updated = { ...user, ...updates };
           localStorage.setItem(STORAGE_CURRENT_KEY, JSON.stringify(updated));
         }
+      }
+      const allUsers = JSON.parse(localStorage.getItem(STORAGE_USERS_KEY) || '{}');
+      if (allUsers[uid]) {
+        allUsers[uid] = { ...allUsers[uid], ...updates };
+        localStorage.setItem(STORAGE_USERS_KEY, JSON.stringify(allUsers));
       }
     } catch {
       // Ignore
@@ -92,10 +96,8 @@ export const userService = {
   async incrementUserReviewCount(uid: string, delta: number = 1): Promise<void> {
     if (isFirebaseConfigured && db) {
       try {
-        const ref = doc(db, 'users', uid);
-        await updateDoc(ref, {
-          reviewsCount: increment(delta)
-        });
+        const userRef = doc(db, 'users', uid);
+        await setDoc(userRef, { reviewsCount: increment(delta) }, { merge: true });
         return;
       } catch (err) {
         console.warn('Failed to increment user review count in Firestore:', err);
@@ -122,11 +124,9 @@ export const userService = {
     let nextCount = 0;
     if (isFirebaseConfigured && db) {
       try {
-        const ref = doc(db, 'users', uid);
-        await updateDoc(ref, {
-          videosCount: increment(delta)
-        });
-        const snap = await getDoc(ref);
+        const userRef = doc(db, 'users', uid);
+        await setDoc(userRef, { videosCount: increment(delta) }, { merge: true });
+        const snap = await getDoc(userRef);
         if (snap.exists()) {
           nextCount = snap.data().videosCount || 0;
         }
@@ -156,10 +156,8 @@ export const userService = {
   async updateHelpfulLikesReceived(uid: string, totalLikes: number): Promise<void> {
     if (isFirebaseConfigured && db) {
       try {
-        const ref = doc(db, 'users', uid);
-        await updateDoc(ref, {
-          helpfulLikesReceived: totalLikes
-        });
+        const userRef = doc(db, 'users', uid);
+        await setDoc(userRef, { helpfulLikesReceived: totalLikes }, { merge: true });
       } catch (err) {
         console.warn('Failed to update helpful likes in Firestore:', err);
       }
@@ -181,19 +179,49 @@ export const userService = {
   /**
    * Upload real profile photo to Firebase Storage avatars/{userId} and update profile
    */
-  async uploadAvatar(file: File | Blob, userId: string): Promise<string> {
-    if (isFirebaseConfigured && storage && userId) {
+  async uploadAvatar(fileOrDataUrl: File | Blob | string, userId: string): Promise<string> {
+    const effectiveUid = auth?.currentUser?.uid || userId;
+    if (!effectiveUid) {
+      throw new Error('You must be logged in to upload a profile picture.');
+    }
+
+    let fileBlob: Blob;
+    let contentType = 'image/jpeg';
+    if (typeof fileOrDataUrl === 'string') {
+      const parts = fileOrDataUrl.split(',');
+      if (parts.length > 1 && parts[0].includes('base64')) {
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        fileBlob = new Blob([u8arr], { type: contentType });
+      } else {
+        const res = await fetch(fileOrDataUrl);
+        fileBlob = await res.blob();
+        contentType = fileBlob.type || 'image/jpeg';
+      }
+    } else {
+      fileBlob = fileOrDataUrl;
+      contentType = fileOrDataUrl.type || 'image/jpeg';
+    }
+
+    // LIVE FIREBASE STORAGE PATH
+    if (isFirebaseConfigured && storage) {
       try {
         const timestamp = Date.now();
-        const rawName = (file as File).name || 'avatar.jpg';
-        const ext = rawName.split('.').pop() || 'jpg';
-        const path = `avatars/${userId}/avatar_${timestamp}.${ext}`;
+        const rawName = (fileOrDataUrl as File).name || 'avatar.jpg';
+        const ext = rawName.includes('.') ? rawName.split('.').pop() || 'jpg' : 'jpg';
+        const path = `avatars/${effectiveUid}/avatar_${timestamp}.${ext}`;
         const storageRef = ref(storage, path);
-        const contentType = file.type || 'image/jpeg';
-        await uploadBytes(storageRef, file, { contentType });
+
+        await uploadBytes(storageRef, fileBlob, { contentType });
         const downloadUrl = await getDownloadURL(storageRef);
 
-        await this.updateUserProfile(userId, { profileImage: downloadUrl });
+        await this.updateUserProfile(effectiveUid, { profileImage: downloadUrl });
 
         if (auth?.currentUser) {
           try {
@@ -203,20 +231,22 @@ export const userService = {
           }
         }
         return downloadUrl;
-      } catch (err) {
-        console.warn('Error uploading avatar to Firebase Storage:', err);
+      } catch (err: any) {
+        console.error('Error uploading avatar to Firebase Storage:', err);
+        throw new Error(err?.message ? `Failed to upload profile photo: ${err.message}` : 'Failed to upload profile photo. Please check your network and try again.');
       }
     }
 
     // Local fallback: FileReader data URL
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const url = (e.target?.result as string) || '';
-        await this.updateUserProfile(userId, { profileImage: url });
+        await this.updateUserProfile(effectiveUid, { profileImage: url });
         resolve(url);
       };
-      reader.readAsDataURL(file);
+      reader.onerror = () => reject(new Error('Failed to process image file.'));
+      reader.readAsDataURL(fileBlob);
     });
   }
 };

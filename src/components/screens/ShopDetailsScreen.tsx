@@ -29,6 +29,8 @@ interface ShopDetailsScreenProps {
   onBack: () => void;
   onWriteReview: (shopId: string) => void;
   onToggleLikeReview?: (shopId: string, reviewId: string) => void;
+  onReviewReactionUpdated?: (shopId: string, reviewId: string, likesCount: number, dislikesCount: number, userReaction: 'like' | 'dislike' | null) => void;
+  onOpenUserProfile?: (userId: string) => void;
 }
 
 interface StallPhotoItem {
@@ -45,12 +47,15 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   currentUserId,
   onBack,
   onWriteReview,
-  onToggleLikeReview
+  onToggleLikeReview,
+  onReviewReactionUpdated,
+  onOpenUserProfile
 }) => {
   // STRICTLY 2 TABS ONLY: 'ratings' and 'photos'
   const [activeTab, setActiveTab] = useState<'ratings' | 'photos'>('ratings');
   const [liveReviews, setLiveReviews] = useState<ShopReview[]>([]);
   const [loadingReviews, setLoadingReviews] = useState<boolean>(true);
+  const [pendingReactions, setPendingReactions] = useState<Record<string, 'like' | 'dislike'>>({});
   const [aggregatedRatings, setAggregatedRatings] = useState({
     rating: typeof shop.rating === 'number' ? shop.rating : 0,
     foodQualityRating: typeof shop.foodQualityRating === 'number' ? shop.foodQualityRating : 0,
@@ -126,10 +131,11 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   }, [shop.id, currentUserId, shop.reviewsCount, shop.reviews?.length]);
 
   const handleLike = async (reviewId: string) => {
-    if (onToggleLikeReview) {
-      onToggleLikeReview(shop.id, reviewId);
-    }
     if (!currentUserId) return;
+    if (pendingReactions[reviewId]) return; // Concurrency protection against double-tapping
+
+    // Immediate visual reaction feedback
+    setPendingReactions((prev) => ({ ...prev, [reviewId]: 'like' }));
 
     try {
       const res = await reviewService.toggleLikeReview(reviewId, currentUserId);
@@ -146,13 +152,26 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             : r
         )
       );
+      if (onReviewReactionUpdated) {
+        onReviewReactionUpdated(shop.id, reviewId, res.likesCount, res.dislikesCount, res.userReaction);
+      }
     } catch (err) {
       console.warn('Like toggle failed:', err);
+    } finally {
+      setPendingReactions((prev) => {
+        const next = { ...prev };
+        delete next[reviewId];
+        return next;
+      });
     }
   };
 
   const handleDislike = async (reviewId: string) => {
     if (!currentUserId) return;
+    if (pendingReactions[reviewId]) return; // Concurrency protection against double-tapping
+
+    // Immediate visual reaction feedback
+    setPendingReactions((prev) => ({ ...prev, [reviewId]: 'dislike' }));
 
     try {
       const res = await reviewService.toggleDislikeReview(reviewId, currentUserId);
@@ -169,8 +188,17 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
             : r
         )
       );
+      if (onReviewReactionUpdated) {
+        onReviewReactionUpdated(shop.id, reviewId, res.likesCount, res.dislikesCount, res.userReaction);
+      }
     } catch (err) {
       console.warn('Dislike toggle failed:', err);
+    } finally {
+      setPendingReactions((prev) => {
+        const next = { ...prev };
+        delete next[reviewId];
+        return next;
+      });
     }
   };
 
@@ -275,7 +303,7 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Hero Image with Floating Controls */}
       <div className="relative h-56 w-full bg-slate-900 flex-shrink-0">
         {shop.imageUrl ? (
@@ -492,6 +520,10 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
               ) : (
                 liveReviews.map((rev) => {
                   const isCurrentUserReview = Boolean(currentUserId && rev.userId === currentUserId);
+                  const isPendingLike = pendingReactions[rev.id] === 'like';
+                  const isPendingDislike = pendingReactions[rev.id] === 'dislike';
+                  const isBusy = Boolean(pendingReactions[rev.id]);
+
                   return (
                     <div
                       key={rev.id}
@@ -502,15 +534,24 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                        {/* Interactive Reviewer Identity -> Opens User Profile */}
+                        <div
+                          onClick={() => {
+                            if (rev.userId && onOpenUserProfile) {
+                              onOpenUserProfile(rev.userId);
+                            }
+                          }}
+                          className="flex items-center gap-2 cursor-pointer group active:opacity-75 transition-opacity"
+                          title={isCurrentUserReview ? 'View your profile' : `View ${rev.userName}'s profile`}
+                        >
                           <img
                             src={rev.userAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'}
                             alt={rev.userName}
-                            className="w-8 h-8 rounded-full object-cover bg-slate-200 ring-1 ring-slate-200"
+                            className="w-8 h-8 rounded-full object-cover bg-slate-200 ring-1 ring-slate-200 group-hover:ring-2 group-hover:ring-orange-400 transition-all"
                           />
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <h4 className="text-xs font-bold text-slate-900">
+                              <h4 className="text-xs font-bold text-slate-900 group-hover:text-orange-600 transition-colors">
                                 {rev.userName}
                               </h4>
                               {isCurrentUserReview && (
@@ -570,40 +611,58 @@ export const ShopDetailsScreen: React.FC<ShopDetailsScreenProps> = ({
                       )}
 
                       {/* Likes and reaction row */}
-                      <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-slate-200/60">
-                        <div className="flex items-center gap-3">
-                          {/* Like button */}
+                      <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-slate-200/60">
+                        <div className="flex items-center gap-2">
+                          {/* Like button - comfortable mobile touch target */}
                           <button
+                            type="button"
                             onClick={() => handleLike(rev.id)}
-                            className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
-                              rev.userLiked ? 'text-orange-600' : 'text-slate-500 hover:text-slate-800'
+                            disabled={isBusy}
+                            className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none active:scale-95 disabled:opacity-75 disabled:cursor-not-allowed ${
+                              isPendingLike
+                                ? 'bg-orange-100 text-orange-700 ring-2 ring-orange-400 scale-95'
+                                : rev.userLiked
+                                ? 'bg-orange-50 text-orange-600 border border-orange-200 shadow-2xs'
+                                : 'bg-slate-100/80 hover:bg-slate-200/70 text-slate-600 border border-transparent'
                             }`}
                             title="Helpful (Like)"
                           >
                             <ThumbsUp
-                              size={13}
-                              className={rev.userLiked ? 'fill-orange-500 text-orange-500' : ''}
+                              size={16}
+                              className={`transition-transform ${
+                                rev.userLiked || isPendingLike ? 'fill-orange-500 text-orange-500 scale-110' : 'text-slate-500'
+                              }`}
                             />
                             <span>{rev.likeCount}</span>
+                            {isPendingLike && <Loader2 size={12} className="animate-spin text-orange-600 ml-0.5" />}
                           </button>
 
-                          {/* Dislike button */}
+                          {/* Dislike button - comfortable mobile touch target */}
                           <button
+                            type="button"
                             onClick={() => handleDislike(rev.id)}
-                            className={`flex items-center gap-1 text-xs font-bold transition-colors cursor-pointer ${
-                              rev.userDisliked ? 'text-slate-800' : 'text-slate-400 hover:text-slate-600'
+                            disabled={isBusy}
+                            className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none active:scale-95 disabled:opacity-75 disabled:cursor-not-allowed ${
+                              isPendingDislike
+                                ? 'bg-slate-200 text-slate-900 ring-2 ring-slate-400 scale-95'
+                                : rev.userDisliked
+                                ? 'bg-slate-200/80 text-slate-800 border border-slate-300 shadow-2xs'
+                                : 'bg-slate-100/80 hover:bg-slate-200/70 text-slate-500 border border-transparent'
                             }`}
                             title="Not helpful (Dislike)"
                           >
                             <ThumbsDown
-                              size={13}
-                              className={rev.userDisliked ? 'fill-slate-700 text-slate-700' : ''}
+                              size={16}
+                              className={`transition-transform ${
+                                rev.userDisliked || isPendingDislike ? 'fill-slate-700 text-slate-700 scale-110' : 'text-slate-400'
+                              }`}
                             />
                             {(rev.dislikeCount || 0) > 0 && <span>{rev.dislikeCount}</span>}
+                            {isPendingDislike && <Loader2 size={12} className="animate-spin text-slate-600 ml-0.5" />}
                           </button>
                         </div>
 
-                        <span className="text-[10px] text-amber-950 font-semibold bg-amber-100 px-2 py-0.5 rounded-md">
+                        <span className="text-[10px] text-amber-950 font-semibold bg-amber-100 px-2 py-1 rounded-md">
                           Verified Experience
                         </span>
                       </div>

@@ -26,7 +26,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   ];
 
   return (
-    <div className="sticky bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 px-4 py-2 flex items-center justify-around shadow-lg shadow-slate-900/5">
+    <div
+      className="sticky bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/80 px-4 pt-2 flex items-center justify-around shadow-lg shadow-slate-900/5 flex-shrink-0"
+      style={{ paddingBottom: 'max(0.5rem, calc(0.25rem + env(safe-area-inset-bottom, 0px)))' }}
+    >
       {tabs.map((tab) => {
         const isActive = activeScreen === tab.id;
         return (

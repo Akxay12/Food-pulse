@@ -56,7 +56,7 @@ export const ShopkeeperProfileScreen: React.FC<ShopkeeperProfileScreenProps> = (
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Top Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button

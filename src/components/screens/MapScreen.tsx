@@ -27,6 +27,7 @@ interface MapScreenProps {
   onOpenShopkeeperSetup?: (initialLocation?: { lat: number; lng: number }) => void;
   currentUserId?: string;
   userRole?: string;
+  focusedShop?: FoodShop | null;
   t: Record<string, string>;
 }
 
@@ -36,6 +37,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({
   onOpenShopkeeperSetup,
   currentUserId = 'local-user-1',
   userRole = 'user',
+  focusedShop = null,
   t
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -301,6 +303,17 @@ export const MapScreen: React.FC<MapScreenProps> = ({
       console.error('[FoodCheck Maps] Error rendering Google Maps markers:', mapErr);
     }
   }, [isGoogleMapActive, userLocation, filteredShops, selectedRadius]);
+
+  // Auto-center map on newly created or focused shop
+  useEffect(() => {
+    if (focusedShop) {
+      setSelectedShop(focusedShop);
+      if (mapInstanceRef.current && typeof focusedShop.lat === 'number' && typeof focusedShop.lng === 'number') {
+        mapInstanceRef.current.setCenter({ lat: focusedShop.lat, lng: focusedShop.lng });
+        mapInstanceRef.current.setZoom(17);
+      }
+    }
+  }, [focusedShop]);
 
   const handleRequestLocation = async () => {
     setLocationMessage(null);
@@ -863,7 +876,11 @@ export const MapScreen: React.FC<MapScreenProps> = ({
             </div>
 
             {/* Modal Form Content */}
-            <form onSubmit={handlePublishStall} className="p-5 overflow-y-auto space-y-4">
+            <form
+              onSubmit={handlePublishStall}
+              className="p-5 overflow-y-auto space-y-4"
+              style={{ paddingBottom: 'max(1.5rem, calc(1rem + env(safe-area-inset-bottom, 0px)))' }}
+            >
               {registerError && (
                 <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
                   <AlertCircle size={15} className="flex-shrink-0" />

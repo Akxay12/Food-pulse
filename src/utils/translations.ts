@@ -21,7 +21,7 @@ export const TRANSLATIONS: Record<SupportedLanguage, Record<string, string>> = {
   en: {
     appName: 'FoodCheck',
     tagline: 'Check it. Know it. Eat smarter.',
-    greeting: 'Good Morning, Harshal 👋',
+    greeting: 'Hello, Harshal 👋',
     heroTitle: 'Is your food safe?',
     heroSubtext: 'Scan your food and get an AI-based safety assessment.',
     scanFoodBtn: 'Scan Food',

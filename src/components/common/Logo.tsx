@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Utensils } from 'lucide-react';
+import foodPulseLogo from '../../assets/logo.png';
 
 interface LogoProps {
   size?: 'sm' | 'md' | 'lg' | 'xl';
@@ -15,19 +15,16 @@ export const Logo: React.FC<LogoProps> = ({
   theme = 'light'
 }) => {
   const sizeMap = {
-    sm: { box: 'w-8 h-8 rounded-xl', icon: 16, shield: 14, title: 'text-base font-bold', tagline: 'text-[10px]' },
-    md: { box: 'w-11 h-11 rounded-2xl', icon: 20, shield: 18, title: 'text-xl font-extrabold', tagline: 'text-xs' },
-    lg: { box: 'w-16 h-16 rounded-3xl', icon: 28, shield: 24, title: 'text-2xl font-extrabold', tagline: 'text-sm' },
-    xl: { box: 'w-24 h-24 rounded-[32px]', icon: 42, shield: 36, title: 'text-3xl font-black', tagline: 'text-base' },
+    sm: { box: 'w-8 h-8 rounded-xl', title: 'text-base font-bold', tagline: 'text-[10px]' },
+    md: { box: 'w-11 h-11 rounded-2xl', title: 'text-xl font-extrabold', tagline: 'text-xs' },
+    lg: { box: 'w-16 h-16 rounded-3xl', title: 'text-2xl font-extrabold', tagline: 'text-sm' },
+    xl: { box: 'w-24 h-24 rounded-[32px]', title: 'text-3xl font-black', tagline: 'text-base' },
   };
   const current = sizeMap[size];
   return (
     <div className="flex items-center gap-3">
-      <div className={`relative ${current.box} bg-gradient-to-br from-amber-400 via-orange-500 to-amber-600 flex items-center justify-center shadow-md shadow-orange-500/20 text-white flex-shrink-0`}>
-        <ShieldCheck className="text-white/95" size={current.icon} strokeWidth={2.4} />
-        <div className="absolute -bottom-1 -right-1 bg-amber-300 text-slate-900 rounded-full p-1 border-2 border-white shadow-xs">
-          <Utensils size={current.shield / 2.2} strokeWidth={2.8} />
-        </div>
+      <div className={`overflow-hidden ${current.box} bg-white flex items-center justify-center shadow-xs border border-slate-200/70 flex-shrink-0 p-0.5`}>
+        <img src={foodPulseLogo} alt="FoodCheck Logo" className="w-full h-full object-contain" />
       </div>
       {showText && (
         <div className="flex flex-col">
@@ -46,8 +43,6 @@ export const Logo: React.FC<LogoProps> = ({
     </div>
   );
 };
-
-import foodPulseLogo from '../../assets/logo.png';
 
 // ─── Logo Component / Placeholder ─────────────────────────────────────────────
 interface LogoPlaceholderProps {

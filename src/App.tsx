@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import { MobileFrame } from './components/common/MobileFrame';
 import { BottomNav } from './components/common/BottomNav';
 import { SplashScreen } from './components/screens/SplashScreen';
@@ -68,7 +70,7 @@ export default function App() {
   });
 
   // App Data State — starts empty; loaded from Firestore via loadAppData()
-  const [recentScans, setRecentScans] = useState<FoodScanResult[]>(INITIAL_RECENT_SCANS);
+  const [recentScans, setRecentScans] = useState<FoodScanResult[]>([]);
   const [activeScanResult, setActiveScanResult] = useState<FoodScanResult | null>(null);
   const [shops, setShops] = useState<FoodShop[]>(INITIAL_SHOPS);
   const [activeShop, setActiveShop] = useState<FoodShop | null>(null);
@@ -77,6 +79,8 @@ export default function App() {
   const [videos, setVideos] = useState<FoodVideo[]>(INITIAL_VIDEOS);
   const [badges, setBadges] = useState<UserBadge[]>(INITIAL_BADGES);
   const [notifications, setNotifications] = useState<AppNotification[]>(INITIAL_NOTIFICATIONS);
+  const [viewingProfileUserId, setViewingProfileUserId] = useState<string | null>(null);
+  const [profileSourceScreen, setProfileSourceScreen] = useState<AppScreen>('home');
 
   // Translation helper dictionary for current language
   const t = TRANSLATIONS[language] || TRANSLATIONS.en;
@@ -113,9 +117,11 @@ export default function App() {
 
       // 2. Load Private Scans for user
       const userScans = await foodScanService.getUserScans(userId);
+      setRecentScans(userScans || []);
       if (userScans && userScans.length > 0) {
-        setRecentScans(userScans);
         setActiveScanResult(userScans[0]);
+      } else {
+        setActiveScanResult(null);
       }
 
       // 3. Load Community Videos
@@ -175,6 +181,102 @@ export default function App() {
     };
   }, [loadAppData]);
 
+  // Android Hardware / Gesture Back Button Handling (Step 4)
+  const navigateBack = useCallback(() => {
+    // If on initial auth/splash, exit app
+    if (currentScreen === 'splash' || currentScreen === 'auth') {
+      if (Capacitor.isNativePlatform()) {
+        CapacitorApp.exitApp();
+      }
+      return;
+    }
+
+    // Contextual backward navigation
+    if (currentScreen === 'scanner_result') {
+      setCurrentScreen('scanner');
+      return;
+    }
+    if (currentScreen === 'scanner') {
+      setCurrentScreen('home');
+      return;
+    }
+    if (currentScreen === 'review_create') {
+      setCurrentScreen('shop_details');
+      return;
+    }
+    if (currentScreen === 'shop_details') {
+      setCurrentScreen(shopSourceScreen || 'home');
+      return;
+    }
+    if (currentScreen === 'shopkeeper_setup' || currentScreen === 'shopkeeper_profile') {
+      setCurrentScreen(userRole === 'shopkeeper' ? 'shopkeeper_dashboard' : 'map');
+      return;
+    }
+    if (currentScreen === 'language') {
+      setCurrentScreen('profile');
+      return;
+    }
+    if (currentScreen === 'notifications') {
+      setCurrentScreen('home');
+      return;
+    }
+    if (currentScreen === 'firebase_test') {
+      setCurrentScreen('profile');
+      return;
+    }
+
+    if (currentScreen === 'profile') {
+      if (profileSourceScreen === 'shop_details') {
+        setCurrentScreen('shop_details');
+        setViewingProfileUserId(null);
+        setProfileSourceScreen('home');
+        return;
+      }
+      setCurrentScreen('home');
+      setViewingProfileUserId(null);
+      return;
+    }
+
+    // If on core secondary tabs (map, videos), pressing Back returns to Home tab
+    if (currentScreen === 'map' || currentScreen === 'videos') {
+      setCurrentScreen('home');
+      return;
+    }
+
+    // If at root screen ('home' or 'shopkeeper_dashboard'), exit app
+    if (currentScreen === 'home' || currentScreen === 'shopkeeper_dashboard') {
+      if (Capacitor.isNativePlatform()) {
+        CapacitorApp.exitApp();
+      }
+      return;
+    }
+
+    setCurrentScreen('home');
+  }, [currentScreen, shopSourceScreen, userRole]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let subHandle: any = null;
+    const setupListener = async () => {
+      try {
+        subHandle = await CapacitorApp.addListener('backButton', () => {
+          navigateBack();
+        });
+      } catch (e) {
+        console.warn('[FoodCheck] BackButton listener error:', e);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (subHandle && typeof subHandle.remove === 'function') {
+        subHandle.remove();
+      }
+    };
+  }, [navigateBack]);
+
   // Splash Screen Handler
   const handleSplashFinish = () => {
     if (isAuthenticated) {
@@ -216,20 +318,33 @@ export default function App() {
 
   // AI Food Scan Handler
   const handleScanComplete = async (result: FoodScanResult) => {
-    setActiveScanResult(result);
-    // Save to Firestore private scans collection
-    const saved = await foodScanService.saveScan(result, user.uid);
-    setRecentScans((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)]);
-    setCurrentScreen('scanner_result');
+    try {
+      setActiveScanResult(result);
+      setCurrentScreen('scanner_result');
 
-    // Create persistent notification
-    const notif = await notificationService.sendNotification({
-      userId: user.uid,
-      title: 'Your food scan is ready',
-      body: `${result.foodName} safety score: ${result.safetyScore}/10 (${result.riskLabel})`,
-      type: 'scan'
-    });
-    setNotifications((prev) => [notif, ...prev]);
+      // Save to Firestore private scans collection asynchronously
+      try {
+        const saved = await foodScanService.saveScan(result, user.uid);
+        setRecentScans((prev) => [saved, ...prev.filter((r) => r.id !== saved.id)]);
+      } catch (saveErr) {
+        console.warn('[FoodCheck App] Non-blocking scan save warning:', saveErr);
+      }
+
+      // Create persistent notification asynchronously
+      try {
+        const notif = await notificationService.sendNotification({
+          userId: user.uid,
+          title: 'Your food scan is ready',
+          body: `${result.foodName} safety score: ${result.safetyScore}/10 (${result.riskLabel})`,
+          type: 'scan'
+        });
+        setNotifications((prev) => [notif, ...prev]);
+      } catch (notifErr) {
+        console.warn('[FoodCheck App] Non-blocking scan notification warning:', notifErr);
+      }
+    } catch (err) {
+      console.error('[FoodCheck App] Error processing completed scan:', err);
+    }
   };
 
   const handleSelectScanResult = (scan: FoodScanResult) => {
@@ -244,8 +359,35 @@ export default function App() {
   };
 
   // Like / Dislike Review Handlers
+  const handleReviewReactionUpdated = (
+    shopId: string,
+    reviewId: string,
+    likesCount: number,
+    dislikesCount: number,
+    userReaction: 'like' | 'dislike' | null
+  ) => {
+    setShops((prevShops) =>
+      prevShops.map((shop) => {
+        if (shop.id !== shopId) return shop;
+        return {
+          ...shop,
+          reviews: shop.reviews.map((rev) => {
+            if (rev.id !== reviewId) return rev;
+            return {
+              ...rev,
+              likeCount: likesCount,
+              dislikeCount: dislikesCount,
+              userLiked: userReaction === 'like',
+              userDisliked: userReaction === 'dislike'
+            };
+          })
+        };
+      })
+    );
+  };
+
   const handleToggleLikeReview = async (shopId: string, reviewId: string) => {
-    // Optimistic UI update
+    // Kept for backward compatibility without duplicate Firestore mutation
     setShops((prevShops) =>
       prevShops.map((shop) => {
         if (shop.id !== shopId) return shop;
@@ -257,15 +399,12 @@ export default function App() {
             return {
               ...rev,
               userLiked,
-              likeCount: userLiked ? rev.likeCount + 1 : rev.likeCount - 1
+              likeCount: userLiked ? rev.likeCount + 1 : Math.max(0, rev.likeCount - 1)
             };
           })
         };
       })
     );
-
-    // Call service to update in Firestore
-    await reviewService.toggleLikeReview(reviewId, user.uid);
   };
 
   // Review Submission Handler
@@ -520,6 +659,7 @@ export default function App() {
       {currentScreen === 'map' && (
         <MapScreen
           shops={shops}
+          focusedShop={activeShop}
           onSelectShop={handleSelectShop}
           onOpenShopkeeperSetup={(initialLoc) => {
             if (initialLoc) {
@@ -541,6 +681,12 @@ export default function App() {
           onBack={() => setCurrentScreen(shopSourceScreen || 'home')}
           onWriteReview={(shopId) => setCurrentScreen('review_create')}
           onToggleLikeReview={handleToggleLikeReview}
+          onReviewReactionUpdated={handleReviewReactionUpdated}
+          onOpenUserProfile={(authorId) => {
+            setViewingProfileUserId(authorId);
+            setProfileSourceScreen('shop_details');
+            setCurrentScreen('profile');
+          }}
         />
       )}
 
@@ -567,17 +713,23 @@ export default function App() {
       {/* 10. User Profile Screen (Module 1F) */}
       {currentScreen === 'profile' && (
         <ProfileScreen
-          userId={user.uid}
-          name={user.name}
-          username={user.username}
-          email={user.email}
-          role={userRole}
-          avatarUrl={user.avatarUrl}
+          userId={viewingProfileUserId || user.uid}
+          currentAuthUserId={user.uid}
+          name={viewingProfileUserId && viewingProfileUserId !== user.uid ? 'FoodCheck Contributor' : user.name}
+          username={viewingProfileUserId && viewingProfileUserId !== user.uid ? '' : user.username}
+          email={viewingProfileUserId && viewingProfileUserId !== user.uid ? '' : user.email}
+          role={viewingProfileUserId && viewingProfileUserId !== user.uid ? 'user' : userRole}
+          avatarUrl={viewingProfileUserId && viewingProfileUserId !== user.uid ? '' : user.avatarUrl}
           badges={badges}
           reviewsCount={user.reviewsCount}
           videosCount={user.videosCount}
           likesCount={user.likesCount}
           onNavigate={(screen) => setCurrentScreen(screen)}
+          onBack={() => {
+            setCurrentScreen(profileSourceScreen || 'home');
+            setViewingProfileUserId(null);
+            setProfileSourceScreen('home');
+          }}
           onSwitchRole={() => {
             const nextRole = userRole === 'shopkeeper' ? 'user' : 'shopkeeper';
             setUserRole(nextRole);
@@ -663,7 +815,13 @@ export default function App() {
       {isMainTabScreen && (
         <BottomNav
           activeScreen={currentScreen}
-          onNavigate={(screen) => setCurrentScreen(screen)}
+          onNavigate={(screen) => {
+            if (screen === 'profile') {
+              setViewingProfileUserId(null);
+              setProfileSourceScreen('home');
+            }
+            setCurrentScreen(screen);
+          }}
           langNavMap={{
             home: t.navHome || 'Home',
             map: t.navMap || 'Map',

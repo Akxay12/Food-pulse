@@ -20,27 +20,22 @@ function getLocalScans(userId?: string): FoodScanResult[] {
     if (raw) {
       const allScans = JSON.parse(raw) as FoodScanResult[];
       if (userId) {
-        return allScans.filter((s) => !s.userId || s.userId === userId);
+        return allScans.filter((s) => s.userId === userId);
       }
       return allScans;
     }
   } catch {
     // Ignore
   }
-
-  const initial = INITIAL_RECENT_SCANS.map((s) => ({
-    ...s,
-    userId: userId || 'local-default-user'
-  }));
-  saveLocalScans(initial);
-  return initial;
+  return [];
 }
 
 function saveLocalScans(scans: FoodScanResult[]) {
   try {
-    localStorage.setItem(STORAGE_SCANS_KEY, JSON.stringify(scans));
-  } catch {
-    // Ignore
+    const trimmed = scans.slice(0, 15);
+    localStorage.setItem(STORAGE_SCANS_KEY, JSON.stringify(trimmed));
+  } catch (err) {
+    console.warn('[FoodCheck LocalScans] localStorage write warning:', err);
   }
 }
 
@@ -89,16 +84,23 @@ export const foodScanService = {
     if (isFirebaseConfigured && db) {
       try {
         const scansRef = collection(db, 'foodScans');
+        // Simple query without compound index requirement
         const q = query(
           scansRef,
           where('userId', '==', userId),
-          orderBy('createdAt', 'desc'),
-          limit(20)
+          limit(30)
         );
         const snapshot = await getDocs(q);
-        if (!snapshot.empty) {
-          return snapshot.docs.map((docSnap) => docSnap.data() as FoodScanResult);
-        }
+        const scans: FoodScanResult[] = snapshot.docs.map((docSnap) => docSnap.data() as FoodScanResult);
+        
+        // Sort descending by date in memory
+        scans.sort((a, b) => {
+          const timeA = (a as any).createdAt ? new Date((a as any).createdAt).getTime() : 0;
+          const timeB = (b as any).createdAt ? new Date((b as any).createdAt).getTime() : 0;
+          return timeB - timeA;
+        });
+
+        return scans;
       } catch (err) {
         console.warn('Failed to fetch scans from Firestore, using local data:', err);
       }

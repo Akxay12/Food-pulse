@@ -29,14 +29,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   t,
 }) => {
   return (
-    <div className="flex-1 overflow-y-auto pb-6 bg-[#FAF7F2]">
+    <div className="flex-1 min-h-0 overflow-y-auto pb-6 bg-[#FAF7F2]">
       {/* Top App Bar: Logo placeholder left, notification bell right */}
       <div className="bg-white px-5 pt-4 pb-4 border-b border-slate-100 flex items-center justify-between sticky top-0 z-30 shadow-xs">
         <div className="flex items-center gap-3">
           <LogoPlaceholder size="sm" />
           <div>
             <h1 className="text-base font-bold text-slate-900 tracking-tight leading-snug">
-              {userName ? `Good Morning, ${userName} 👋` : (t.greeting || 'Good Morning 👋')}
+              {userName ? `Hello, ${userName} 👋` : (t.greeting || 'Hello 👋')}
             </h1>
             <p className="text-[11px] text-slate-500 font-medium">
               Eat smarter with FoodCheck AI

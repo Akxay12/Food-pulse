@@ -1,15 +1,28 @@
 import React, { useState } from 'react';
-import { Wifi, Signal, BatteryMedium, Smartphone, Maximize2, Minimize2 } from 'lucide-react';
+import { Wifi, Signal, BatteryMedium, Maximize2, Minimize2 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 
 interface MobileFrameProps {
   children: React.ReactNode;
   activeScreen: string;
 }
 
-export const MobileFrame: React.FC<MobileFrameProps> = ({ children, activeScreen }) => {
+export const MobileFrame: React.FC<MobileFrameProps> = ({ children }) => {
+  const isNative = Capacitor.isNativePlatform();
   const [isFrameMode, setIsFrameMode] = useState<boolean>(true);
 
-  // Current realistic time
+  // 1. Native Android / Mobile Container (100vw x 100vh full screen, no fake bezel)
+  if (isNative) {
+    return (
+      <div className="w-full h-full min-h-screen flex flex-col bg-[#FAF7F2] text-slate-900 overflow-hidden relative select-none pt-[env(safe-area-inset-top,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]">
+        <div className="flex-1 min-h-0 flex flex-col relative bg-[#FAF7F2] overflow-hidden w-full h-full">
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Desktop / Browser Preview Mode with Bezel Toggle
   const currentTime = '09:41';
 
   return (
@@ -19,12 +32,12 @@ export const MobileFrame: React.FC<MobileFrameProps> = ({ children, activeScreen
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-            Android Mobile UI · Flutter Ready
+            Android Mobile UI · FoodCheck
           </span>
         </div>
         <button
           onClick={() => setIsFrameMode(!isFrameMode)}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
           title="Toggle Mobile Bezel"
         >
           {isFrameMode ? (
@@ -71,7 +84,7 @@ export const MobileFrame: React.FC<MobileFrameProps> = ({ children, activeScreen
         </div>
 
         {/* Screen Content Body */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col relative bg-[#FAF7F2]">
+        <div className="flex-1 min-h-0 flex flex-col relative bg-[#FAF7F2] overflow-hidden">
           {children}
         </div>
 

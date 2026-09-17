@@ -10,7 +10,7 @@ import {
   orderBy
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage, isFirebaseConfigured } from './firebase';
+import { auth, db, storage, isFirebaseConfigured } from './firebase';
 import { FoodShop, ShopDocument, MenuItem } from '../types';
 
 const STORAGE_SHOPS_KEY = 'foodcheck_local_shops';
@@ -220,34 +220,60 @@ export const shopService = {
    * bucket path: shops/{ownerId}/{type}_{timestamp}.{ext}
    */
   async uploadShopMedia(
-    file: File | Blob,
+    fileOrDataUrl: File | Blob | string,
     ownerId: string,
     type: 'stall' | 'menu'
   ): Promise<string> {
-    if (isFirebaseConfigured && storage && ownerId) {
+    const effectiveOwnerId = auth?.currentUser?.uid || ownerId || 'user';
+
+    let fileBlob: Blob;
+    let contentType = 'image/jpeg';
+    if (typeof fileOrDataUrl === 'string') {
+      const parts = fileOrDataUrl.split(',');
+      if (parts.length > 1 && parts[0].includes('base64')) {
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        fileBlob = new Blob([u8arr], { type: contentType });
+      } else {
+        const res = await fetch(fileOrDataUrl);
+        fileBlob = await res.blob();
+        contentType = fileBlob.type || 'image/jpeg';
+      }
+    } else {
+      fileBlob = fileOrDataUrl;
+      contentType = fileOrDataUrl.type || 'image/jpeg';
+    }
+
+    if (isFirebaseConfigured && storage) {
       try {
         const timestamp = Date.now();
-        const rawName = (file as File).name || `${type}_photo.jpg`;
+        const rawName = (fileOrDataUrl as File).name || `${type}_photo.jpg`;
         const ext = rawName.split('.').pop() || 'jpg';
         const cleanName = `${type}_${timestamp}.${ext}`;
-        const path = `shops/${ownerId}/${cleanName}`;
+        const path = `shops/${effectiveOwnerId}/${cleanName}`;
         const storageRef = ref(storage, path);
-        const contentType = file.type || 'image/jpeg';
 
-        await uploadBytes(storageRef, file, { contentType });
+        await uploadBytes(storageRef, fileBlob, { contentType });
         const downloadUrl = await getDownloadURL(storageRef);
         console.info(`[FoodCheck Storage] Uploaded ${type} image successfully:`, downloadUrl);
         return downloadUrl;
-      } catch (err) {
-        console.warn(`[FoodCheck Storage] Firebase Storage upload error for ${type}:`, err);
+      } catch (err: any) {
+        console.error(`[FoodCheck Storage] Firebase Storage upload error for ${type}:`, err);
+        throw new Error(err?.message ? `Failed to upload image: ${err.message}` : 'Failed to upload image to storage.');
       }
     }
 
-    // Fallback: Read as data URL from user's file so it's their real image, never fake placeholder
+    // Fallback: Read as data URL from user's file so it's their real image
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = (e) => resolve((e.target?.result as string) || '');
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(fileBlob);
     });
   },
 

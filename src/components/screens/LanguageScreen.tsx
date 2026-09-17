@@ -15,7 +15,7 @@ export const LanguageScreen: React.FC<LanguageScreenProps> = ({
   onBack,
 }) => {
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none">
       {/* Top Bar */}
       <div className="bg-white px-4 py-3.5 border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between shadow-xs">
         <button

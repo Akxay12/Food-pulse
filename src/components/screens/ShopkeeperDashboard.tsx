@@ -29,7 +29,7 @@ export const ShopkeeperDashboard: React.FC<ShopkeeperDashboardProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#FAF7F2] text-slate-900 overflow-y-auto select-none pb-12">
       {/* Top Header */}
       <div className="bg-white px-5 pt-4 pb-4 border-b border-slate-100 flex items-center justify-between sticky top-0 z-30 shadow-xs">
         <div className="min-w-0 flex-1 mr-3">

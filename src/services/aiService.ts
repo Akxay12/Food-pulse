@@ -1,16 +1,84 @@
 import { GoogleGenAI } from '@google/genai';
 import { FoodScanResult, ScanType, AnalysisSummaryItem } from '../types';
+import { compressAndResizeImage } from '../utils/imageUtils';
+
 // Safe development diagnostic (Never print the key itself)
 console.log('[Gemini] API key configured:', Boolean(import.meta.env.VITE_AI_API_KEY));
 
 function getGeminiApiKey(): string {
-  const raw = import.meta.env.VITE_AI_API_KEY;
+  const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : (typeof process !== 'undefined' && (process.env as any) ? (process.env as any) : {});
+  const raw = env.VITE_AI_API_KEY || env.AI_API_KEY;
   if (!raw) return '';
   const cleaned = String(raw).trim().replace(/^["']|["']$/g, '').trim();
   if (cleaned === '' || cleaned === 'MY_AI_API_KEY' || cleaned === '""' || cleaned === "''") {
     return '';
   }
   return cleaned;
+}
+
+function redactCredentials(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, '[REDACTED_KEY]')
+    .replace(/(key=)[0-9A-Za-z-_]+/gi, '$1[REDACTED_KEY]')
+    .replace(/(api_key=)[0-9A-Za-z-_]+/gi, '$1[REDACTED_KEY]');
+}
+
+export function formatGeminiError(err: any): string {
+  if (!err) return 'Reason: An unknown error occurred while communicating with Gemini API.';
+
+  const rawMsg = typeof err === 'string' ? err : err?.message || String(err);
+  const cleanMsg = redactCredentials(rawMsg);
+
+  // Check if formatted error string was already thrown
+  if (cleanMsg.startsWith('Reason:') || cleanMsg.startsWith('Status:')) {
+    return cleanMsg;
+  }
+
+  // Extract HTTP status code if available
+  const statusCode = err?.status || err?.statusCode || err?.response?.status || err?.errorDetails?.status;
+
+  if (cleanMsg.includes('Gemini API request timed out')) {
+    return 'Reason: Gemini API request timed out after 25 seconds. Please check your network connection and try again.';
+  }
+
+  if (
+    cleanMsg.includes('Failed to fetch') ||
+    cleanMsg.includes('NetworkError') ||
+    cleanMsg.includes('network error') ||
+    cleanMsg.includes('net::ERR_') ||
+    cleanMsg.includes('TypeError: fetch failed') ||
+    cleanMsg.includes('ENOTFOUND') ||
+    cleanMsg.includes('ECONNREFUSED')
+  ) {
+    return 'Reason: Unable to reach Gemini API. Please check your internet connection.';
+  }
+
+  if (cleanMsg.includes('SERVICE_DISABLED') || cleanMsg.includes('Gemini API has not been used')) {
+    return 'Status: 403\nReason: Generative Language API is not enabled on this Google Cloud project. Please enable it in Google Cloud Console.';
+  }
+
+  if (cleanMsg.includes('API_KEY_INVALID') || cleanMsg.includes('API key not valid')) {
+    return 'Status: 401\nReason: The configured Gemini API key is invalid. Please check VITE_AI_API_KEY in your .env file.';
+  }
+
+  if (cleanMsg.includes('PERMISSION_DENIED')) {
+    return 'Status: 403\nReason: Permission denied calling Gemini API. Please ensure your API key has Generative Language API permissions.';
+  }
+
+  if (cleanMsg.includes('RESOURCE_EXHAUSTED') || cleanMsg.includes('429') || statusCode === 429) {
+    return 'Status: 429\nReason: Resource exhausted / rate limit exceeded. Please try again later.';
+  }
+
+  if (cleanMsg.includes('NOT_FOUND') || cleanMsg.includes('404') || statusCode === 404) {
+    return 'Status: 404\nReason: Model gemini-3.6-flash is unavailable or not found.';
+  }
+
+  if (statusCode) {
+    return `Status: ${statusCode}\nReason: ${cleanMsg.slice(0, 200)}`;
+  }
+
+  return `Reason: ${cleanMsg.slice(0, 200)}`;
 }
 
 export interface AIScanInput {
@@ -43,15 +111,16 @@ export const aiService = {
     const apiKey = getGeminiApiKey();
     if (!apiKey) {
       console.warn('[FoodCheck AI] Gemini API key is missing from environment (VITE_AI_API_KEY).');
-      throw new Error(
-        'Gemini API key is not configured. Please add VITE_AI_API_KEY in your .env file to enable live AI food safety scanning.'
-      );
+      throw new Error('Reason: Gemini API key is not configured.');
     }
+
+    // Downscale and compress raw camera base64 data to memory-safe dimensions (~100-250KB)
+    const optimizedImageBase64 = await compressAndResizeImage(imageBase64, 1024, 0.8);
 
     // Parse image mime type and clean base64 data
     let mimeType = 'image/jpeg';
-    let cleanBase64 = imageBase64;
-    const dataUrlMatch = imageBase64.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+    let cleanBase64 = optimizedImageBase64;
+    const dataUrlMatch = optimizedImageBase64.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
     if (dataUrlMatch) {
       mimeType = dataUrlMatch[1];
       cleanBase64 = dataUrlMatch[2];
@@ -119,50 +188,51 @@ CRITICAL RULES:
     const userPrompt = `Scan mode: ${scanType === 'packaged' ? 'PACKAGED FOOD' : 'STREET FOOD'}. Preferred language: ${language}. Analyze the attached food image carefully according to the rules.`;
 
     try {
-      const candidateModels = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
+      const modelName = 'gemini-3.6-flash';
       let response: any = null;
-      let lastError: any = null;
 
-      for (const modelName of candidateModels) {
-        try {
-          response = await ai.models.generateContent({
-            model: modelName,
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  { text: systemInstructions + '\n\n' + userPrompt },
-                  {
-                    inlineData: {
-                      mimeType,
-                      data: cleanBase64
-                    }
+      try {
+        const generatePromise = ai.models.generateContent({
+          model: modelName,
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                { text: systemInstructions + '\n\n' + userPrompt },
+                {
+                  inlineData: {
+                    mimeType,
+                    data: cleanBase64
                   }
-                ]
-              }
-            ],
-            config: {
-              responseMimeType: 'application/json',
-              temperature: 0.1
+                }
+              ]
             }
-          });
-          if (response?.text) {
-            console.info(`[FoodCheck AI] Gemini request succeeded using model ${modelName}`);
-            break;
+          ],
+          config: {
+            responseMimeType: 'application/json',
+            temperature: 0.1
           }
-        } catch (err: any) {
-          lastError = err;
-          const msg = String(err?.message || '');
-          if (msg.includes('404') || msg.includes('not found') || msg.includes('no longer available') || msg.includes('503')) {
-            console.warn(`[FoodCheck AI] Model ${modelName} unavailable, trying next candidate...`);
-            continue;
-          }
-          throw err;
-        }
-      }
+        });
 
-      if (!response && lastError) {
-        throw lastError;
+        // Wrap call with a 25-second timeout safeguard
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error('Gemini API request timed out after 25 seconds. Please check your network connection and try again.')
+              ),
+            25000
+          )
+        );
+
+        response = await Promise.race([generatePromise, timeoutPromise]);
+
+        if (response?.text) {
+          console.info(`[FoodCheck AI] Gemini request succeeded using model ${modelName}`);
+        }
+      } catch (err: any) {
+        console.error(`[FoodCheck AI] Error calling model ${modelName}:`, err);
+        throw err;
       }
 
       const rawText = response?.text || '';
@@ -179,7 +249,7 @@ CRITICAL RULES:
         parsed = JSON.parse(cleanedJson);
       } catch (jsonErr) {
         console.error('[FoodCheck AI] Failed to parse JSON response from Gemini:', rawText);
-        throw new Error('Gemini returned an unstructured response. Please try scanning again with clearer lighting.');
+        throw new Error('Reason: Gemini returned an unstructured response. Please try scanning again with clearer lighting.');
       }
 
       // Validate and clamp fields
@@ -292,7 +362,7 @@ CRITICAL RULES:
         foodName: detectedFood,
         foodType: scanType,
         foodTypeLabel,
-        imageUrl: imageBase64,
+        imageUrl: optimizedImageBase64,
         scanDate: 'Scanned just now (Live AI)',
         safetyScore,
         confidence,
@@ -316,25 +386,9 @@ CRITICAL RULES:
         }
       };
     } catch (err: any) {
-      const errMsg = err?.message || String(err);
-      console.error('[FoodCheck AI] Gemini API call error:', {
-        message: errMsg.slice(0, 250),
-        status: err?.status || err?.code || 'ERROR'
-      });
-
-      if (errMsg.includes('SERVICE_DISABLED') || errMsg.includes('Gemini API has not been used')) {
-        throw new Error(
-          'Gemini API is not enabled on this Google Cloud project. Please enable "Generative Language API" in Google Cloud Console or check your API key.'
-        );
-      }
-      if (errMsg.includes('API_KEY_INVALID') || errMsg.includes('API key not valid')) {
-        throw new Error('The configured Gemini API key is invalid. Please check VITE_AI_API_KEY in your .env file.');
-      }
-      if (errMsg.includes('PERMISSION_DENIED')) {
-        throw new Error('Permission denied calling Gemini API. Please ensure your API key has Generative Language API permissions.');
-      }
-
-      throw new Error(`Gemini AI analysis failed: ${errMsg.slice(0, 160)}`);
+      const formattedError = formatGeminiError(err);
+      console.error('[FoodCheck AI] Gemini API call error:', formattedError);
+      throw new Error(formattedError);
     }
   }
 };

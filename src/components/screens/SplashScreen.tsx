@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ShieldCheck, Utensils, ArrowRight } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
+import foodPulseLogo from '../../assets/logo.png';
 
 interface SplashScreenProps {
   onFinish: () => void;
@@ -44,11 +45,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             showLogo ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-75 translate-y-4'
           }`}
         >
-          <div className="relative w-24 h-24 rounded-3xl bg-gradient-to-br from-amber-400 via-orange-500 to-amber-600 flex items-center justify-center shadow-xl shadow-orange-500/25 text-white">
-            <ShieldCheck size={48} strokeWidth={2.3} className="text-white" />
-            <div className="absolute -bottom-1.5 -right-1.5 bg-amber-300 text-slate-900 rounded-full p-2 border-2 border-white shadow-md">
-              <Utensils size={18} strokeWidth={2.8} />
-            </div>
+          <div className="w-28 h-28 rounded-3xl overflow-hidden bg-white shadow-xl shadow-orange-500/20 flex items-center justify-center border border-amber-200/60 p-2">
+            <img src={foodPulseLogo} alt="FoodCheck Logo" className="w-full h-full object-contain" />
           </div>
         </div>
 
